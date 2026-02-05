@@ -1,12 +1,10 @@
 import os
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# В Railway используем переменные окружения, а не .env
-# Удаляем: from dotenv import load_dotenv
-# Удаляем: load_dotenv()
-
+# Railway: используем переменные окружения
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -153,11 +151,11 @@ def get_week_accessory_exercises(week_data):
     
     return exercises
 
-async def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало работы с ботом - показываем список недель"""
     await show_weeks_menu(update, context)
 
-async def show_weeks_menu(update: Update, context: CallbackContext):
+async def show_weeks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать меню выбора недели"""
     keyboard = []
     
@@ -182,7 +180,7 @@ async def show_weeks_menu(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text(text, reply_markup=reply_markup)
 
-async def show_days_menu(update: Update, context: CallbackContext, week_num: int):
+async def show_days_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, week_num: int):
     """Показать меню дней недели"""
     query = update.callback_query
     await query.answer()
@@ -215,7 +213,7 @@ async def show_days_menu(update: Update, context: CallbackContext, week_num: int
     
     await query.edit_message_text(text, reply_markup=reply_markup)
 
-async def handle_day_selection(update: Update, context: CallbackContext):
+async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора дня"""
     query = update.callback_query
     await query.answer()
@@ -247,7 +245,7 @@ async def handle_day_selection(update: Update, context: CallbackContext):
     else:
         await show_workout(update, context, week_key, day_key)
 
-async def ask_about_weights(update: Update, context: CallbackContext, week_key: str, day_key: str):
+async def ask_about_weights(update: Update, context: ContextTypes.DEFAULT_TYPE, week_key: str, day_key: str):
     """Спросить про использование текущих весов"""
     query = update.callback_query
     await query.answer()
@@ -292,7 +290,7 @@ async def ask_about_weights(update: Update, context: CallbackContext, week_key: 
         reply_markup=reply_markup
     )
 
-async def handle_weights_decision(update: Update, context: CallbackContext):
+async def handle_weights_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка решения по весам"""
     query = update.callback_query
     await query.answer()
@@ -312,7 +310,7 @@ async def handle_weights_decision(update: Update, context: CallbackContext):
     elif decision == 'edit':
         await show_edit_weight(update, context, 0)
 
-async def show_edit_weight(update: Update, context: CallbackContext, index: int):
+async def show_edit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE, index: int):
     """Показать упражнение для редактирования веса"""
     query = update.callback_query
     await query.answer()
@@ -369,7 +367,7 @@ async def show_edit_weight(update: Update, context: CallbackContext, index: int)
     
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=reply_markup)
 
-async def handle_weight_edit(update: Update, context: CallbackContext):
+async def handle_weight_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка редактирования веса"""
     query = update.callback_query
     await query.answer()
@@ -400,9 +398,8 @@ async def handle_weight_edit(update: Update, context: CallbackContext):
         context.user_data['edit_index'] = index + 1
         await show_edit_weight(update, context, index + 1)
 
-async def handle_custom_weight_input(update: Update, context: CallbackContext):
+async def handle_custom_weight_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода пользовательского веса"""
-    user_id = update.effective_user.id
     text = update.message.text
     
     index = context.user_data.get('awaiting_custom_weight')
@@ -426,19 +423,13 @@ async def handle_custom_weight_input(update: Update, context: CallbackContext):
         context.user_data['edit_index'] = index + 1
         context.user_data.pop('awaiting_custom_weight', None)
         
-        # Создаем fake update для продолжения
-        class FakeQuery:
-            def __init__(self, message):
-                self.message = message
-        
-        fake_query = FakeQuery(update.message)
-        
-        await show_edit_weight(type('FakeUpdate', (), {'callback_query': fake_query})(), context, index + 1)
+        # Продолжаем редактирование
+        await show_edit_weight(update, context, index + 1)
         
     except ValueError:
         await update.message.reply_text("❌ Пожалуйста, введи число (например: 22.5):")
 
-async def show_workout(update: Update, context: CallbackContext, week_key: str, day_key: str):
+async def show_workout(update: Update, context: ContextTypes.DEFAULT_TYPE, week_key: str, day_key: str):
     """Показать тренировку"""
     if hasattr(update, 'callback_query'):
         query = update.callback_query
@@ -494,7 +485,7 @@ async def show_workout(update: Update, context: CallbackContext, week_key: str, 
     else:
         await update.message.reply_text(text, parse_mode='HTML', reply_markup=reply_markup)
 
-async def show_completed_day(update: Update, context: CallbackContext, week_key: str, day_key: str):
+async def show_completed_day(update: Update, context: ContextTypes.DEFAULT_TYPE, week_key: str, day_key: str):
     """Показать завершенную тренировку"""
     query = update.callback_query
     await query.answer()
@@ -529,7 +520,7 @@ async def show_completed_day(update: Update, context: CallbackContext, week_key:
     
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=reply_markup)
 
-async def complete_workout(update: Update, context: CallbackContext):
+async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отметить тренировку как завершенную"""
     query = update.callback_query
     await query.answer()
@@ -552,7 +543,7 @@ async def complete_workout(update: Update, context: CallbackContext):
     # Показываем обновленное меню дней
     await show_days_menu(update, context, week_num)
 
-async def handle_menu_navigation(update: Update, context: CallbackContext):
+async def handle_menu_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка навигации по меню"""
     query = update.callback_query
     await query.answer()
@@ -566,13 +557,19 @@ async def handle_menu_navigation(update: Update, context: CallbackContext):
         week_num = int(data_parts[2])
         await show_days_menu(update, context, week_num)
 
-async def cancel(update: Update, context: CallbackContext):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена действия"""
     await update.message.reply_text("Действие отменено. Нажми /start для начала.")
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Ошибка: {context.error}")
+    if update and update.effective_message:
+        await update.effective_message.reply_text("❌ Произошла ошибка. Попробуйте еще раз.")
+
 def main():
     # Railway: берем токен из переменных окружения
-    TOKEN = os.getenv('BOT_TOKEN')  # Изменено с TELEGRAM_TOKEN на BOT_TOKEN
+    TOKEN = os.getenv('BOT_TOKEN')
     
     if not TOKEN:
         logger.error("❌ Ошибка: BOT_TOKEN не найден!")
@@ -580,7 +577,7 @@ def main():
         return
     
     try:
-        # Используем старую версию API для совместимости
+        # Создаем приложение
         application = Application.builder().token(TOKEN).build()
         
         # Регистрируем обработчики
@@ -598,10 +595,17 @@ def main():
         # Обработчик ввода пользовательского веса
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_weight_input))
         
+        # Обработчик ошибок
+        application.add_error_handler(error_handler)
+        
         logger.info("🚀 Бот программы 'Жим 150' запускается...")
         logger.info(f"✅ Токен получен (первые 10 символов): {TOKEN[:10]}...")
         
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Запускаем бота
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
         
     except Exception as e:
         logger.error(f"💥 Критическая ошибка запуска: {e}")
