@@ -1,5 +1,6 @@
 import logging
 import time
+import urllib.request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -209,9 +210,32 @@ def main():
     logger.info("🚀 ЗАПУСК ТРЕНИРОВОЧНОГО БОТА")
     logger.info("=" * 50)
     
-    # Ждем перед запуском
-    logger.info("⏳ Жду 20 секунд перед запуском...")
-    time.sleep(20)
+    # АГРЕССИВНЫЙ СБРОС КОНФЛИКТА
+    logger.info("🔄 СБРАСЫВАЮ КОНФЛИКТ TELEGRAM...")
+    
+    try:
+        # 1. Сброс вебхука
+        urllib.request.urlopen(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true",
+            timeout=10
+        )
+        logger.info("✅ Вебхук сброшен")
+        time.sleep(5)
+        
+        # 2. Закрытие соединений
+        urllib.request.urlopen(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/close",
+            timeout=10
+        )
+        logger.info("✅ Соединения закрыты")
+        time.sleep(10)
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка сброса: {e}")
+    
+    # Ждем еще
+    logger.info("⏳ Жду 30 секунд перед запуском...")
+    time.sleep(30)
     
     logger.info("🎯 Запуск бота...")
     
@@ -243,8 +267,8 @@ def main():
         
         # Если конфликт - ждем и пробуем еще раз
         if "Conflict" in str(e):
-            logger.info("⚠️ Конфликт обнаружен. Жду 30 секунд...")
-            time.sleep(30)
+            logger.info("⚠️ Конфликт обнаружен. Жду 60 секунд...")
+            time.sleep(60)
             logger.info("🔄 Пробую перезапустить...")
             main()  # Рекурсивный перезапуск
 
