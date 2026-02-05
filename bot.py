@@ -15,7 +15,7 @@ def start(update: Update, context: CallbackContext):
 
 def main():
     # ВАШ ТОКЕН СЮДА
-    token = "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ"
+    token = "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4"
     
     logger.info("🚀 Запускаю бота...")
     
