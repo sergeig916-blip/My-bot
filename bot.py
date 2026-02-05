@@ -1,15 +1,17 @@
 import os
 import logging
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# Railway: используем переменные окружения
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# ВАШ ТОКЕН ПРЯМО ЗДЕСЬ
+BOT_TOKEN = "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4"
 
 USER_MAXES = {'bench': 117.5, 'squat': 125, 'deadlift': 150}
 
@@ -568,17 +570,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("❌ Произошла ошибка. Попробуйте еще раз.")
 
 def main():
-    # Railway: берем токен из переменных окружения
-    TOKEN = os.getenv('BOT_TOKEN')
-    
-    if not TOKEN:
-        logger.error("❌ Ошибка: BOT_TOKEN не найден!")
-        logger.error("Добавьте в Railway Variables: BOT_TOKEN = ваш_токен")
-        return
-    
+    """Основная функция запуска бота"""
     try:
+        logger.info("🚀 Бот программы 'Жим 150' запускается...")
+        logger.info(f"✅ Используется токен: {BOT_TOKEN[:10]}...")
+        
         # Создаем приложение
-        application = Application.builder().token(TOKEN).build()
+        application = Application.builder().token(BOT_TOKEN).build()
         
         # Регистрируем обработчики
         application.add_handler(CommandHandler('start', start))
@@ -598,8 +596,7 @@ def main():
         # Обработчик ошибок
         application.add_error_handler(error_handler)
         
-        logger.info("🚀 Бот программы 'Жим 150' запускается...")
-        logger.info(f"✅ Токен получен (первые 10 символов): {TOKEN[:10]}...")
+        logger.info("✅ Приложение создано, запускаю поллинг...")
         
         # Запускаем бота
         application.run_polling(
