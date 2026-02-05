@@ -26,3 +26,13 @@ def main():
 
 if __name__ == '__main__':
     main()
+    def main():
+    # ВРЕМЕННО: токен прямо в коде
+    BOT_TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"  # Вставьте ваш токен
+    
+    # Или оставьте получение из переменных окружения:
+    # BOT_TOKEN = os.getenv('BOT_TOKEN') or "ВАШ_ТОКЕН_ЗДЕСЬ"
+    
+    if not BOT_TOKEN:
+        logger.error("ERROR: BOT_TOKEN не найден!")
+        return
