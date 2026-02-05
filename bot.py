@@ -17,7 +17,7 @@ def main():
     
     # 2. Если не нашли, используем этот (ЗАМЕНИТЕ НА СВОЙ!)
     if token is None:
-        token = "ВАШ_ТОКЕН_ЗДЕСЬ"  # ⬅️ ВСТАВЬТЕ ВАШ ТОКЕН СЮДА
+        token = "8533684792:AAEX7st5kMflI-IL7XWOAohNhgODXzI12g8"  # ⬅️ ВСТАВЬТЕ ВАШ ТОКЕН СЮДА
     
     if not token:
         logger.error("❌ Токен не найден!")
