@@ -12,7 +12,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ========== ПРОСТЫЕ ДАННЫЕ ==========
+# ========== ДАННЫЕ ТРЕНИРОВОК ==========
 TRAINING_WEEKS = {
     "1": {
         "name": "Неделя 1",
@@ -90,9 +90,9 @@ TRAINING_WEEKS = {
     }
 }
 
-# ========== ОБРАБОТЧИКИ ==========
+# ========== ОБРАБОТЧИКИ КОМАНД ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
+    """Обработчик команды /start"""
     keyboard = [
         [InlineKeyboardButton("📅 Неделя 1", callback_data="week:1")],
         [InlineKeyboardButton("📅 Неделя 2", callback_data="week:2")]
@@ -141,7 +141,7 @@ async def show_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         day = TRAINING_WEEKS[week_num]["days"][day_num]
         
-        # Формируем текст
+        # Формируем текст тренировки
         text = f"<b>📋 {TRAINING_WEEKS[week_num]['name']} • {day['name']}</b>\n\n"
         
         for i, exercise in enumerate(day['exercises'], 1):
@@ -149,17 +149,18 @@ async def show_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text += "\n"
         
+        # Клавиатура
         keyboard = [
-            [InlineKeyboardButton("✅ Завершить", callback_data=f"complete:{week_num}:{day_num}")],
-            [InlineKeyboardButton("⬅️ К дням", callback_data=f"week:{week_num}")],
-            [InlineKeyboardButton("🏁 На главную", callback_data="back:start")]
+            [InlineKeyboardButton("✅ Завершить тренировку", callback_data=f"complete:{week_num}:{day_num}")],
+            [InlineKeyboardButton("⬅️ К дням недели", callback_data=f"week:{week_num}")],
+            [InlineKeyboardButton("🏁 Выбрать неделю", callback_data="back:start")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(text, parse_mode='HTML', reply_markup=reply_markup)
         
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка в show_workout: {e}")
         await query.edit_message_text("❌ Ошибка загрузки тренировки")
 
 async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -179,31 +180,31 @@ async def handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if query.data == "back:start":
-        keyboard = [
-            [InlineKeyboardButton("📅 Неделя 1", callback_data="week:1")],
-            [InlineKeyboardButton("📅 Неделя 2", callback_data="week:2")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\nВыбери неделю:",
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
+    keyboard = [
+        [InlineKeyboardButton("📅 Неделя 1", callback_data="week:1")],
+        [InlineKeyboardButton("📅 Неделя 2", callback_data="week:2")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\nВыбери неделю:",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ошибок"""
+    """Глобальный обработчик ошибок"""
     logger.error(f"Ошибка: {context.error}")
-    if update and update.callback_query:
-        try:
-            await update.callback_query.answer("⚠️ Ошибка, попробуйте /start")
-        except:
-            pass
+    
+    try:
+        if update.callback_query:
+            await update.callback_query.answer("⚠️ Ошибка. Попробуй /start")
+    except:
+        pass
 
-# ========== ЗАПУСК ==========
+# ========== ЗАПУСК БОТА ==========
 def main():
-    """Запуск бота"""
+    """Основная функция запуска бота"""
     logger.info("=" * 50)
     logger.info("🚀 ЗАПУСК ТРЕНИРОВОЧНОГО БОТА")
     logger.info("=" * 50)
@@ -212,18 +213,18 @@ def main():
     logger.info("⏳ Жду 20 секунд перед запуском...")
     time.sleep(20)
     
-    # Запускаем бота
     logger.info("🎯 Запуск бота...")
     
     try:
+        # Создаем приложение
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # Обработчики
+        # Регистрируем обработчики
         application.add_handler(CommandHandler('start', start))
-        application.add_handler(CallbackQueryHandler(show_days, pattern=r'^week:[12]$'))
-        application.add_handler(CallbackQueryHandler(show_workout, pattern=r'^day:[12]:[123]$'))
-        application.add_handler(CallbackQueryHandler(complete_workout, pattern=r'^complete:'))
-        application.add_handler(CallbackQueryHandler(handle_back, pattern=r'^back:'))
+        application.add_handler(CallbackQueryHandler(show_days, pattern='^week:[12]$'))
+        application.add_handler(CallbackQueryHandler(show_workout, pattern='^day:[12]:[123]$'))
+        application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
+        application.add_handler(CallbackQueryHandler(handle_back, pattern='^back:'))
         
         # Обработчик ошибок
         application.add_error_handler(error_handler)
@@ -231,20 +232,21 @@ def main():
         logger.info("✅ Все обработчики зарегистрированы")
         logger.info("▶️ Запускаю polling...")
         
-        # Запуск
+        # Запускаем бота
         application.run_polling(
             drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            timeout=30,
-            read_latency=5.0
+            allowed_updates=Update.ALL_TYPES
         )
         
     except Exception as e:
-        logger.error(f"💥 ОШИБКА: {e}")
+        logger.error(f"💥 ОШИБКА ЗАПУСКА: {e}")
+        
+        # Если конфликт - ждем и пробуем еще раз
         if "Conflict" in str(e):
-            logger.info("⚠️ Конфликт. Перезапуск через 30 секунд...")
+            logger.info("⚠️ Конфликт обнаружен. Жду 30 секунд...")
             time.sleep(30)
-            main()  # Перезапуск
+            logger.info("🔄 Пробую перезапустить...")
+            main()  # Рекурсивный перезапуск
 
 if __name__ == '__main__':
     main()
