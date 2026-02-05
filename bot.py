@@ -1,17 +1,43 @@
 import os
-from telegram.ext import Application, CommandHandler
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-async def start(update, context):
-    await update.message.reply_text("✅ Бот работает!")
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Команда /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text('✅ Бот запущен и работает!')
 
 def main():
-    token = os.getenv('BOT_TOKEN') or "ВАШ_ТОКЕН"
+    # Получаем токен
+    TOKEN = os.getenv('BOT_TOKEN')
     
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("start", start))
+    # Если тестируете - можно вставить напрямую (удалите позже!)
+    # TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"
     
-    print("Бот запущен!")
-    app.run_polling()
+    if not TOKEN:
+        logger.error("❌ Токен не найден!")
+        return
+    
+    try:
+        # Создаем приложение
+        app = Application.builder().token(TOKEN).build()
+        
+        # Добавляем команды
+        app.add_handler(CommandHandler("start", start))
+        
+        # Запускаем
+        logger.info("🚀 Запускаю бота...")
+        app.run_polling()
+        
+    except Exception as e:
+        logger.error(f"💥 Ошибка: {e}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
