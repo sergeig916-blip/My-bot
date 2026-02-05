@@ -1,7 +1,6 @@
 import os
 import logging
 import time
-import requests
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackContext
 
@@ -12,51 +11,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def start(update: Update, context: CallbackContext):
-    update.message.reply_text('✅ Бот работает! Конфликт устранен.')
+    update.message.reply_text('✅ Бот работает на Railway!')
 
 def main():
-    # ВАШ ТОКЕН (замените!)
+    # ВАШ ТОКЕН СЮДА
     token = "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ"
     
-    logger.info("🔄 Сбрасываю старое состояние бота...")
+    logger.info("🚀 Запускаю бота...")
     
-    # 1. Сбрасываем ВСЕ в Telegram API
-    try:
-        requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true", timeout=10)
-        requests.get(f"https://api.telegram.org/bot{token}/close", timeout=10)
-        logger.info("✅ Telegram API сброшен")
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось сбросить API: {e}")
-    
-    # 2. Ждем
-    time.sleep(3)
-    
-    # 3. Запускаем бота
     try:
         updater = Updater(token, use_context=True)
         dispatcher = updater.dispatcher
         dispatcher.add_handler(CommandHandler("start", start))
         
-        logger.info("🚀 Запускаю бота...")
-        
-        # Запуск с очисткой ВСЕГО
+        # Сбрасываем все старые сообщения
         updater.start_polling(
             drop_pending_updates=True,
             timeout=30,
-            read_latency=10.0,
-            allowed_updates=['message']
+            read_latency=5.0
         )
         
-        logger.info("🎉 Бот успешно запущен! Ошибок нет.")
+        logger.info("🎉 Бот успешно запущен!")
         updater.idle()
         
     except Exception as e:
-        logger.error(f"💥 Критическая ошибка: {e}")
-        # Если конфликт, ждем и пробуем еще раз
+        logger.error(f"💥 Ошибка: {e}")
         if "Conflict" in str(e):
-            logger.info("⏳ Жду 30 секунд и пробую еще раз...")
-            time.sleep(30)
-            main()  # рекурсивный перезапуск
+            logger.info("⚠️ Конфликт. Жду 20 секунд...")
+            time.sleep(20)
+            # Пробуем еще раз
+            main()
 
 if __name__ == '__main__':
     main()
