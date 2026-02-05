@@ -3,36 +3,31 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Настройка логов
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('✅ Бот запущен и работает!')
+    await update.message.reply_text('✅ Бот работает! Привет!')
 
 def main():
-    # Получаем токен
-    TOKEN = os.getenv('BOT_TOKEN')
+    # 1. Сначала пробуем взять токен из Railway
+    token = os.getenv('BOT_TOKEN')
     
-    # Если тестируете - можно вставить напрямую (удалите позже!)
-    # TOKEN = "ВАШ_ТОКЕН_ЗДЕСЬ"
+    # 2. Если не нашли, используем этот (ЗАМЕНИТЕ НА СВОЙ!)
+    if token is None:
+        token = "ВАШ_ТОКЕН_ЗДЕСЬ"  # ⬅️ ВСТАВЬТЕ ВАШ ТОКЕН СЮДА
     
-    if not TOKEN:
+    if not token:
         logger.error("❌ Токен не найден!")
         return
     
     try:
-        # Создаем приложение
-        app = Application.builder().token(TOKEN).build()
-        
-        # Добавляем команды
+        # Создаем бота
+        app = Application.builder().token(token).build()
         app.add_handler(CommandHandler("start", start))
         
-        # Запускаем
         logger.info("🚀 Запускаю бота...")
         app.run_polling()
         
