@@ -1,5 +1,6 @@
 import logging
 import time
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -285,7 +286,7 @@ async def ask_about_weights(update: Update, context: ContextTypes.DEFAULT_TYPE):
     week_weights = week_data['week_weights']
     
     # Формируем текст с весами
-    weights_text = "<b>🏋️ Веса подсобки для недели {week_num}:</b>\n\n"
+    weights_text = f"<b>🏋️ Веса подсобки для недели {week_num}:</b>\n\n"
     
     for i, exercise in enumerate(accessory_exercises, 1):
         weight = week_weights.get(exercise['key'], DEFAULT_ACCESSORY_WEIGHTS.get(exercise['key'], 0))
@@ -521,9 +522,22 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-# ========== ЗАПУСК БОТА ==========
-def main():
-    """Основная функция запуска бота"""
+async def restart_bot_on_conflict():
+    """Автоматический перезапуск при конфликте"""
+    while True:
+        try:
+            logger.info("🔄 Попытка запуска бота...")
+            await main_async()
+        except Exception as e:
+            if "Conflict" in str(e) or "409" in str(e):
+                logger.warning("⚠️ Конфликт обнаружен, жду 5 минут...")
+                await asyncio.sleep(300)  # Ждем 5 минут
+            else:
+                logger.error(f"💥 Другая ошибка: {e}")
+                await asyncio.sleep(60)  # Ждем 1 минуту перед повторной попыткой
+
+async def main_async():
+    """Основная асинхронная функция запуска бота"""
     logger.info("🚀 Бот запускается...")
     
     try:
@@ -547,14 +561,26 @@ def main():
         
         logger.info("✅ Все обработчики зарегистрированы")
         
-        # Запускаем бота
-        application.run_polling(
+        # Запускаем бота с обработкой конфликтов
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES
         )
         
+        logger.info("🤖 Бот успешно запущен и работает")
+        
+        # Бот работает до остановки
+        await asyncio.Event().wait()
+        
     except Exception as e:
-        logger.error(f"💥 Ошибка запуска: {e}")
+        logger.error(f"💥 Ошибка при запуске: {e}")
+        raise  # Пробрасываем ошибку для restart_bot_on_conflict
+
+def main():
+    """Точка входа"""
+    asyncio.run(restart_bot_on_conflict())
 
 if __name__ == '__main__':
     main()
