@@ -1,6 +1,5 @@
 import logging
 import time
-import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -15,14 +14,14 @@ logger = logging.getLogger(__name__)
 
 # ========== ПРОСТЫЕ ДАННЫЕ ==========
 TRAINING_WEEKS = {
-    "week_1": {
+    "1": {
         "name": "Неделя 1",
         "days": {
             "1": {
                 "name": "Ноги + Грудь",
                 "exercises": [
-                    "🏋️ Приседания: 50% × 10 × 3",
-                    "🏋️ Жим лежа: 75% × 3 × 5", 
+                    "🏋️ Приседания: 50% × 10 × 3 (≈62.5кг)",
+                    "🏋️ Жим лежа: 75% × 3 × 5 (≈87.5кг)", 
                     "📊 Разводка гантелей: 17.5кг × 10 × 3",
                     "📊 Обратные сгибания: 25кг × 10 × 4",
                     "💪 Пресс: 3 подхода",
@@ -32,7 +31,7 @@ TRAINING_WEEKS = {
             "2": {
                 "name": "Спина + Плечи", 
                 "exercises": [
-                    "🏋️ Жим стоя: 35% × 6 × 2",
+                    "🏋️ Жим стоя: 35% × 6 × 2 (≈41кг)",
                     "📊 Гиперэкстензия с весом: 20кг × 10 × 4",
                     "📊 Тяга вертикальная: 50кг × 10 × 4",
                     "📊 Тяга горизонтальная: 40кг × 10 × 4",
@@ -43,8 +42,8 @@ TRAINING_WEEKS = {
             "3": {
                 "name": "Грудь + Плечи",
                 "exercises": [
-                    "🏋️ Жим лежа: 60% × 5 × 2",
-                    "🏋️ Жим на наклонной: 50% × 6 × 4",
+                    "🏋️ Жим лежа: 60% × 5 × 2 (≈70кг)",
+                    "🏋️ Жим на наклонной: 50% × 6 × 4 (≈58.5кг)",
                     "📊 Разводка на наклонной: 17.5кг × 8 × 4",
                     "📊 Махи в стороны: 4кг × 8 × 4",
                     "📊 Обратный бицепс: 25кг × 8 × 5"
@@ -52,14 +51,14 @@ TRAINING_WEEKS = {
             }
         }
     },
-    "week_2": {
+    "2": {
         "name": "Неделя 2", 
         "days": {
             "1": {
                 "name": "Ноги + Грудь",
                 "exercises": [
-                    "🏋️ Приседания: 55% × 8 × 3",
-                    "🏋️ Жим лежа: 80% × 3 × 4",
+                    "🏋️ Приседания: 55% × 8 × 3 (≈68.5кг)",
+                    "🏋️ Жим лежа: 80% × 3 × 4 (≈94кг)",
                     "📊 Разводка гантелей: 17.5кг × 10 × 3",
                     "📊 Обратные сгибания: 25кг × 10 × 4",
                     "💪 Пресс: 3 подхода",
@@ -69,7 +68,7 @@ TRAINING_WEEKS = {
             "2": {
                 "name": "Спина + Плечи",
                 "exercises": [
-                    "🏋️ Жим стоя: 40% × 6 × 2",
+                    "🏋️ Жим стоя: 40% × 6 × 2 (≈47кг)",
                     "📊 Гиперэкстензия с весом: 20кг × 10 × 4",
                     "📊 Тяга вертикальная: 50кг × 10 × 4",
                     "📊 Тяга горизонтальная: 40кг × 10 × 4",
@@ -80,8 +79,8 @@ TRAINING_WEEKS = {
             "3": {
                 "name": "Грудь + Плечи",
                 "exercises": [
-                    "🏋️ Жим лежа: 65% × 5 × 2",
-                    "🏋️ Жим на наклонной: 50% × 6 × 4",
+                    "🏋️ Жим лежа: 65% × 5 × 2 (≈76кг)",
+                    "🏋️ Жим на наклонной: 50% × 6 × 4 (≈58.5кг)",
                     "📊 Разводка на наклонной: 17.5кг × 8 × 4",
                     "📊 Махи в стороны: 4кг × 8 × 4",
                     "📊 Обратный бицепс: 25кг × 8 × 5"
@@ -90,33 +89,6 @@ TRAINING_WEEKS = {
         }
     }
 }
-
-# ========== СБРОС КОНФЛИКТА ==========
-def reset_telegram_conflict():
-    """Агрессивный сброс конфликта в Telegram"""
-    logger.info("🔄 Сбрасываю конфликт Telegram...")
-    
-    try:
-        # 1. Удаляем вебхук
-        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-        time.sleep(2)
-        
-        # 2. Закрываем все соединения
-        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/close", timeout=10)
-        time.sleep(2)
-        
-        # 3. Проверяем бота
-        response = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=10)
-        if response.status_code == 200:
-            logger.info("✅ Telegram API сброшен успешно")
-            return True
-        else:
-            logger.error("❌ Не удалось сбросить Telegram API")
-            return False
-            
-    except Exception as e:
-        logger.error(f"⚠️ Ошибка сброса: {e}")
-        return False
 
 # ========== ОБРАБОТЧИКИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -144,7 +116,6 @@ async def show_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     week_num = query.data.split(":")[1]
-    week_key = f"week_{week_num}"
     
     keyboard = [
         [InlineKeyboardButton(f"📋 День 1", callback_data=f"day:{week_num}:1")],
@@ -155,7 +126,7 @@ async def show_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        f"📅 <b>{TRAINING_WEEKS[week_key]['name']}</b>\n\nВыбери день тренировки:",
+        f"📅 <b>{TRAINING_WEEKS[week_num]['name']}</b>\n\nВыбери день тренировки:",
         parse_mode='HTML',
         reply_markup=reply_markup
     )
@@ -167,12 +138,11 @@ async def show_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         _, week_num, day_num = query.data.split(":")
-        week_key = f"week_{week_num}"
         
-        day = TRAINING_WEEKS[week_key]["days"][day_num]
+        day = TRAINING_WEEKS[week_num]["days"][day_num]
         
         # Формируем текст
-        text = f"<b>📋 {TRAINING_WEEKS[week_key]['name']} • {day['name']}</b>\n\n"
+        text = f"<b>📋 {TRAINING_WEEKS[week_num]['name']} • {day['name']}</b>\n\n"
         
         for i, exercise in enumerate(day['exercises'], 1):
             text += f"{i}. {exercise}\n"
@@ -238,17 +208,12 @@ def main():
     logger.info("🚀 ЗАПУСК ТРЕНИРОВОЧНОГО БОТА")
     logger.info("=" * 50)
     
-    # 1. Агрессивный сброс конфликта
-    logger.info("🔄 Этап 1: Сброс конфликта Telegram...")
-    if not reset_telegram_conflict():
-        logger.warning("⚠️ Не удалось сбросить конфликт, продолжаем...")
+    # Ждем перед запуском
+    logger.info("⏳ Жду 20 секунд перед запуском...")
+    time.sleep(20)
     
-    # 2. Ждем
-    logger.info("⏳ Этап 2: Жду 15 секунд...")
-    time.sleep(15)
-    
-    # 3. Запускаем бота
-    logger.info("🎯 Этап 3: Запуск бота...")
+    # Запускаем бота
+    logger.info("🎯 Запуск бота...")
     
     try:
         application = Application.builder().token(BOT_TOKEN).build()
@@ -266,21 +231,20 @@ def main():
         logger.info("✅ Все обработчики зарегистрированы")
         logger.info("▶️ Запускаю polling...")
         
-        # Запуск с увеличенными таймаутами
+        # Запуск
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
-            timeout=60,
-            read_latency=10.0,
-            connect_timeout=30.0,
-            pool_timeout=30.0
+            timeout=30,
+            read_latency=5.0
         )
         
     except Exception as e:
-        logger.error(f"💥 КРИТИЧЕСКАЯ ОШИБКА: {e}")
-        logger.info("🔄 Перезапуск через 30 секунд...")
-        time.sleep(30)
-        main()  # Рекурсивный перезапуск
+        logger.error(f"💥 ОШИБКА: {e}")
+        if "Conflict" in str(e):
+            logger.info("⚠️ Конфликт. Перезапуск через 30 секунд...")
+            time.sleep(30)
+            main()  # Перезапуск
 
 if __name__ == '__main__':
     main()
