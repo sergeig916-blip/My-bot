@@ -13,7 +13,7 @@ def start(update: Update, context: CallbackContext):
     update.message.reply_text('✅ Бот работает!')
 
 def main():
-    token = os.getenv('BOT_TOKEN') or "ВАШ_ТОКЕН_ЗДЕСЬ"
+    token = os.getenv('BOT_TOKEN') or "8533684792:AAEX7st5kMflI-IL7XWOAohNhgODXzI12g8"
     
     if not token:
         logger.error("❌ Токен не найден!")
