@@ -1,0 +1,24 @@
+{
+  "1": {
+    "fly_flat": 17.5,
+    "fly_incline": 17.5,
+    "reverse_curl": 25.0,
+    "hyperextension_weight": 20.0,
+    "horizontal_row": 40.0,
+    "vertical_pull": 50.0,
+    "lateral_raise": 4.0,
+    "rear_delt_fly": 3.0,
+    "leg_extension": 54.0
+  },
+  "2": {
+    "fly_flat": 18.0,
+    "fly_incline": 18.0,
+    "reverse_curl": 26.0,
+    "hyperextension_weight": 21.0,
+    "horizontal_row": 42.0,
+    "vertical_pull": 52.0,
+    "lateral_raise": 4.5,
+    "rear_delt_fly": 3.5,
+    "leg_extension": 56.0
+  }
+}
