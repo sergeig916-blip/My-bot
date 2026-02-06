@@ -266,7 +266,7 @@ async def handle_select_week(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return await review_accessory_weights(update, context)
 
 async def review_accessory_weights(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать веса подсобки для редактирования (упрощенная версия с +/-0.5)"""
+    """Показать веса подсобки для редактирования"""
     query = update.callback_query
     await query.answer()
     
@@ -292,30 +292,26 @@ async def review_accessory_weights(update: Update, context: ContextTypes.DEFAULT
     # Формируем сообщение
     text = f"<b>📝 Веса для подсобки (Неделя {week_number})</b>\n\n"
     
-    for i, exercise in enumerate(exercises, 1):
-        weight = user_weights.get(exercise['key'], 0)
-        text += f"{i}. {exercise['name']}: <b>{weight}кг</b>\n"
-    
-    text += "\nНастрой веса и нажми Продолжить:"
-    
-    # Создаем клавиатуру с кнопками для каждого упражнения
     keyboard = []
     for i, exercise in enumerate(exercises, 1):
         weight = user_weights.get(exercise['key'], 0)
+        text += f"{i}. {exercise['name']}: <b>{weight}кг</b>\n"
+        
+        # Кнопки для каждого упражнения: название и +/-0.5
         keyboard.append([
-            InlineKeyboardButton("➖0.5", callback_data=f"adj_acc:-0.5:{week_number}:{exercise['key']}"),
-            InlineKeyboardButton(f"{exercise['name'][:15]}...", callback_data="noop"),
-            InlineKeyboardButton("➕0.5", callback_data=f"adj_acc:0.5:{week_number}:{exercise['key']}")
-        ])
-        keyboard.append([
-            InlineKeyboardButton(f"   Текущий вес: {weight}кг", callback_data="noop")
+            InlineKeyboardButton(
+                f"{i}. {exercise['name']}",
+                callback_data=f"edit_weight_simple:{week_number}:{exercise['key']}"
+            )
         ])
     
+    text += "\nНажми на упражнение, чтобы изменить вес, или продолжи с текущими весами:"
+    
     keyboard.append([
-        InlineKeyboardButton("✅ Продолжить", callback_data=f"use_weights:{week_number}")
+        InlineKeyboardButton("✅ Продолжить с этими весами", callback_data=f"use_weights:{week_number}")
     ])
     keyboard.append([
-        InlineKeyboardButton("⬅️ Назад", callback_data="back_to_weeks")
+        InlineKeyboardButton("⬅️ Выбрать другую неделю", callback_data="back_to_weeks")
     ])
     
     await query.edit_message_text(
@@ -326,8 +322,61 @@ async def review_accessory_weights(update: Update, context: ContextTypes.DEFAULT
     
     return REVIEW_ACCESSORY_WEIGHTS
 
-async def adjust_accessory_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Регулировка веса подсобки +/-0.5"""
+async def edit_weight_simple(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Изменение веса подсобки (упрощенная версия с +/-0.5)"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем данные
+    _, week_str, exercise_key = query.data.split(":")
+    week_number = int(week_str)
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    # Сохраняем какое упражнение редактируем
+    user_state['editing_exercise'] = exercise_key
+    user_state['current_week'] = week_number
+    
+    # Находим имя упражнения
+    exercises = get_accessory_exercises_for_week(week_number)
+    exercise_name = next((e['name'] for e in exercises if e['key'] == exercise_key), exercise_key)
+    
+    # Текущий вес
+    if week_number not in user_state['accessory_weights']:
+        user_state['accessory_weights'][week_number] = DEFAULT_ACCESSORY_WEIGHTS[week_number].copy()
+    
+    current_weight = user_state['accessory_weights'][week_number].get(exercise_key, 0)
+    user_state['editing_weight'] = current_weight
+    
+    text = (
+        f"<b>✏️ Изменение веса</b>\n\n"
+        f"Упражнение: {exercise_name}\n"
+        f"Текущий вес: <b>{current_weight}кг</b>\n\n"
+        f"Используй кнопки для изменения (±0.5кг):"
+    )
+    
+    # Создаем клавиатуру с кнопками +/-0.5
+    keyboard = [
+        [
+            InlineKeyboardButton("➖0.5", callback_data=f"adjust_simple:-0.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton(f"{current_weight}кг", callback_data="noop"),
+            InlineKeyboardButton("➕0.5", callback_data=f"adjust_simple:0.5:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"back_to_review:{week_number}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return EDIT_WEIGHT
+
+async def adjust_weight_simple(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрая регулировка веса подсобки +/-0.5"""
     query = update.callback_query
     await query.answer()
     
@@ -351,9 +400,35 @@ async def adjust_accessory_weight(update: Update, context: ContextTypes.DEFAULT_
     
     # Сохраняем новый вес
     user_state['accessory_weights'][week_number][exercise_key] = new_weight
+    user_state['editing_weight'] = new_weight
     
-    # Обновляем сообщение
-    return await review_accessory_weights(update, context)
+    # Обновляем сообщение с новыми кнопками
+    exercises = get_accessory_exercises_for_week(week_number)
+    exercise_name = next((e['name'] for e in exercises if e['key'] == exercise_key), exercise_key)
+    
+    text = (
+        f"<b>✏️ Изменение веса</b>\n\n"
+        f"Упражнение: {exercise_name}\n"
+        f"Текущий вес: <b>{new_weight}кг</b>\n\n"
+        f"Используй кнопки для изменения (±0.5кг):"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("➖0.5", callback_data=f"adjust_simple:-0.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton(f"{new_weight}кг", callback_data="noop"),
+            InlineKeyboardButton("➕0.5", callback_data=f"adjust_simple:0.5:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"back_to_review:{week_number}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def start_week_training(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начать тренировку недели"""
@@ -466,7 +541,7 @@ async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Завершить тренировку"""
+    """Завершить тренировку (исправленная версия)"""
     query = update.callback_query
     await query.answer()
     
@@ -501,32 +576,23 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if week_number < 2:  # Если это не последняя неделя
             text += f"Готов перейти к <b>неделе {week_number + 1}</b>?\n"
             keyboard = [
-                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"go_to_next_week:{week_number + 1}")],
+                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"go_next_week:{week_number + 1}")],
                 [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")]
             ]
         else:  # Если это последняя неделя
-            text += "🏆 <b>Ты завершил все недели тренировок!</b>\n"
-            
-            # Сохраняем неделю как завершенную
-            if 'completed_weeks' not in user_state:
-                user_state['completed_weeks'] = []
-            if week_number not in user_state['completed_weeks']:
-                user_state['completed_weeks'].append(week_number)
-            
-            # Показываем запрос проходки
-            old_max = USER_MAXES['bench']
-            text += f"\n📊 <b>Время для проходки по жиму лежа!</b>\n"
-            text += f"Предыдущий максимум: <b>{old_max}кг</b>\n\n"
+            text += "🏆 <b>Ты завершил все недели тренировок!</b>\n\n"
+            text += f"📊 <b>Время для проходки по жиму лежа!</b>\n"
+            text += f"Предыдущий максимум: <b>{USER_MAXES['bench']}кг</b>\n\n"
             text += f"Установи новый максимум (±0.5кг):"
             
             keyboard = [
                 [
-                    InlineKeyboardButton("➖0.5", callback_data=f"adj_entry:-0.5"),
-                    InlineKeyboardButton(f"{old_max}кг", callback_data="noop"),
-                    InlineKeyboardButton("➕0.5", callback_data=f"adj_entry:0.5")
+                    InlineKeyboardButton("➖0.5", callback_data=f"adj_bench:-0.5"),
+                    InlineKeyboardButton(f"{USER_MAXES['bench']}кг", callback_data="noop"),
+                    InlineKeyboardButton("➕0.5", callback_data=f"adj_bench:0.5")
                 ],
                 [
-                    InlineKeyboardButton("✅ Подтвердить результат", callback_data=f"confirm_entry:{old_max}")
+                    InlineKeyboardButton("✅ Подтвердить результат", callback_data=f"confirm_bench:{USER_MAXES['bench']}")
                 ]
             ]
     else:
@@ -546,11 +612,9 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    
-    return SELECT_WEEK
 
-async def go_to_next_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Переход к следующей неделе"""
+async def go_next_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переход к следующей неделе (рабочая версия)"""
     query = update.callback_query
     await query.answer()
     
@@ -565,8 +629,8 @@ async def go_to_next_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Показываем настройку весов для следующей недели
     return await review_accessory_weights(update, context)
 
-async def adjust_entry_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Регулировка результата проходки +/-0.5"""
+async def adjust_bench_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Регулировка результата проходки по жиму +/-0.5"""
     query = update.callback_query
     await query.answer()
     
@@ -584,19 +648,18 @@ async def adjust_entry_result(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = (
         "🏆 <b>Ты завершил все недели тренировок!</b>\n\n"
         f"📊 <b>Время для проходки по жиму лежа!</b>\n"
-        f"Установи новый максимум (±0.5кг):\n\n"
-        f"Текущий результат: <b>{current_max}кг</b>\n\n"
-        "Нажми 'Подтвердить результат', когда будешь готов:"
+        f"Предыдущий максимум: <b>{USER_MAXES['bench']}кг</b>\n\n"
+        f"Установи новый максимум (±0.5кг):"
     )
     
     keyboard = [
         [
-            InlineKeyboardButton("➖0.5", callback_data=f"adj_entry:-0.5"),
-            InlineKeyboardButton(f"{current_max}кг", callback_data="noop"),
-            InlineKeyboardButton("➕0.5", callback_data=f"adj_entry:0.5")
+            InlineKeyboardButton("➖0.5", callback_data=f"adj_bench:-0.5"),
+            InlineKeyboardButton(f"{USER_MAXES['bench']}кг", callback_data="noop"),
+            InlineKeyboardButton("➕0.5", callback_data=f"adj_bench:0.5")
         ],
         [
-            InlineKeyboardButton("✅ Подтвердить результат", callback_data=f"confirm_entry:{current_max}")
+            InlineKeyboardButton("✅ Подтвердить результат", callback_data=f"confirm_bench:{USER_MAXES['bench']}")
         ]
     ]
     
@@ -606,8 +669,8 @@ async def adjust_entry_result(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def confirm_entry_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение результата проходки"""
+async def confirm_bench_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение результата проходки по жиму"""
     query = update.callback_query
     await query.answer()
     
@@ -640,8 +703,6 @@ async def confirm_entry_result(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    
-    return SELECT_WEEK
 
 async def start_new_cycle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начать новый цикл тренировок"""
@@ -741,6 +802,14 @@ async def back_to_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     week_number = int(query.data.split(":")[1])
     await show_days_for_week(update, context, week_number)
 
+async def back_to_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вернуться к просмотру весов"""
+    query = update.callback_query
+    await query.answer()
+    
+    week_number = int(query.data.split(":")[1])
+    return await review_accessory_weights(update, context)
+
 async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пустой обработчик для кнопок без действия"""
     query = update.callback_query
@@ -778,19 +847,22 @@ def main():
                     CallbackQueryHandler(show_maxes, pattern='^menu:maxes$'),
                     CallbackQueryHandler(reset_progress, pattern='^reset_progress$'),
                     CallbackQueryHandler(show_week_selection, pattern='^menu:main$'),
-                    CallbackQueryHandler(go_to_next_week, pattern='^go_to_next_week:'),
-                    CallbackQueryHandler(confirm_entry_result, pattern='^confirm_entry:'),
+                    CallbackQueryHandler(go_next_week, pattern='^go_next_week:'),
+                    CallbackQueryHandler(confirm_bench_result, pattern='^confirm_bench:'),
                     CallbackQueryHandler(start_new_cycle, pattern='^start_new_cycle$')
                 ],
                 REVIEW_ACCESSORY_WEIGHTS: [
-                    CallbackQueryHandler(adjust_accessory_weight, pattern='^adj_acc:'),
+                    CallbackQueryHandler(edit_weight_simple, pattern='^edit_weight_simple:'),
                     CallbackQueryHandler(start_week_training, pattern='^use_weights:'),
                     CallbackQueryHandler(show_week_selection, pattern='^back_to_weeks$'),
-                    CallbackQueryHandler(show_week_selection, pattern='^menu:main$')
+                ],
+                EDIT_WEIGHT: [
+                    CallbackQueryHandler(adjust_weight_simple, pattern='^adjust_simple:'),
+                    CallbackQueryHandler(back_to_review, pattern='^back_to_review:'),
                 ],
                 ENTRY_TEST: [
-                    CallbackQueryHandler(adjust_entry_result, pattern='^adj_entry:'),
-                    CallbackQueryHandler(confirm_entry_result, pattern='^confirm_entry:')
+                    CallbackQueryHandler(adjust_bench_result, pattern='^adj_bench:'),
+                    CallbackQueryHandler(confirm_bench_result, pattern='^confirm_bench:')
                 ]
             },
             fallbacks=[
