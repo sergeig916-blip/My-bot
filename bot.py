@@ -3,6 +3,7 @@ import json
 import logging
 import sys
 from typing import Dict, List
+from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -23,7 +24,7 @@ def load_admin_ids():
         with open('admins.json', 'r') as f:
             return json.load(f)
     except:
-        return []
+        return []  # Если файла нет - пустой список
 
 ADMIN_IDS = load_admin_ids()
 
@@ -161,32 +162,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ========== УТИЛИТЫ ДЛЯ ФОРМАТИРОВАНИЯ ==========
-def format_exercise(exercise: Dict, weight: float = None, is_base: bool = False) -> str:
-    """Форматирует упражнение в красивый вид"""
-    name = exercise['name']
-    
-    # Определяем эмодзи для типа упражнения
-    if is_base:
-        emoji = "🏋️"
-    else:
-        emoji = "💪"
-    
-    # Формируем строку с параметрами
-    params = []
-    if weight is not None:
-        params.append(f"{weight}кг")
-    
-    if exercise.get('reps'):
-        params.append(f"{exercise['reps']} повторений")
-    
-    if exercise.get('sets'):
-        params.append(f"{exercise['sets']} подходов")
-    
-    # Объединяем параметры в скобках
-    params_str = f" ({', '.join(params)})" if params else ""
-    
-    return f"{emoji} {name}{params_str}"
-
 def calculate_weight(exercise_name: str, percentage: float):
     """Рассчитывает рабочий вес для упражнения"""
     exercise_lower = exercise_name.lower()
@@ -249,9 +224,38 @@ def get_user_state(user_id: int) -> Dict:
             'entry_test_result': None,
             'username': None,
             'first_name': None,
-            'last_name': None
+            'last_name': None,
+            'registration_date': datetime.now().isoformat()
         }
     return user_data[user_id]
+
+def get_user_progress_stats(user_id: int) -> Dict:
+    """Получает статистику прогресса пользователя"""
+    user_state = get_user_state(user_id)
+    completed_days = user_state['completed_days']
+    
+    # Считаем пройденные недели и дни
+    completed_weeks = 0
+    completed_days_count = 0
+    
+    for week_num in [1, 2]:
+        days_in_week = completed_days.get(week_num, [])
+        days_count = len(days_in_week)
+        completed_days_count += days_count
+        
+        # Неделя считается пройденной, если пройдены все 3 дня
+        if days_count == 3:
+            completed_weeks += 1
+    
+    # Процент выполнения всей программы (6 дней максимум)
+    total_progress = (completed_days_count / 6) * 100 if completed_days_count > 0 else 0
+    
+    return {
+        'completed_weeks': completed_weeks,
+        'completed_days': completed_days_count,
+        'total_progress': round(total_progress, 1),
+        'entry_test_result': user_state.get('entry_test_result')
+    }
 
 # ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -284,8 +288,8 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
         keyboard.append([InlineKeyboardButton(label, callback_data=f"week:{week_num}")])
     
     keyboard.append([InlineKeyboardButton("📊 Мои максимумы", callback_data="maxes")])
+    keyboard.append([InlineKeyboardButton("📈 Прогресс", callback_data="progress")])  # Изменил название
     keyboard.append([InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="reset")])
-    keyboard.append([InlineKeyboardButton("👁️‍🗨️ Прогресс учеников", callback_data="admin")])
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
@@ -302,6 +306,50 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+async def show_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать прогресс пользователя"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    # Получаем статистику
+    stats = get_user_progress_stats(user_id)
+    
+    text = "<b>📈 Ваш прогресс</b>\n\n"
+    
+    # Основная статистика
+    text += f"✅ <b>Пройдено недель:</b> {stats['completed_weeks']}/2\n"
+    text += f"📅 <b>Пройдено дней:</b> {stats['completed_days']}/6\n"
+    text += f"📊 <b>Общий прогресс:</b> {stats['total_progress']}%\n\n"
+    
+    # Детали по неделям
+    for week_num in [1, 2]:
+        completed_days = user_state['completed_days'].get(week_num, [])
+        progress_bar = create_progress_bar(completed_days)
+        days_count = len(completed_days)
+        
+        week_status = "✅ Завершена" if days_count == 3 else f"В процессе ({days_count}/3)"
+        
+        text += f"<b>Неделя {week_num}:</b> {week_status}\n"
+        text += f"           {progress_bar}\n"
+    
+    # Результат проходки
+    if stats['entry_test_result']:
+        text += f"\n🏆 <b>Последняя проходка по жиму:</b> {stats['entry_test_result']}кг\n"
+    
+    # Подсказка
+    text += "\n<i>Продолжайте тренировки для достижения цели!</i>"
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back")]]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def handle_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора недели"""
@@ -788,58 +836,13 @@ async def reset_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Панель администратора с проверкой прав"""
+    """Панель администратора"""
     query = update.callback_query
     await query.answer()
     
-    # Проверка прав
-    user_id = query.from_user.id
-    if ADMIN_IDS and user_id not in ADMIN_IDS:
-        await query.answer("⛔ Доступ запрещен")
-        return
-    
-    if len(user_data) == 0:
-        text = "📊 <b>Панель администратора</b>\n\nПока нет активных пользователей."
-    else:
-        text = "<b>📊 Прогресс учеников:</b>\n\n"
-        
-        for uid, data in user_data.items():
-            username = data.get('username', 'Без username')
-            first_name = data.get('first_name', '')
-            last_name = data.get('last_name', '')
-            
-            user_info = f"{first_name} {last_name}".strip()
-            if user_info:
-                user_info = f" ({user_info})"
-            
-            total_completed = 0
-            for week in [1, 2]:
-                completed_days = data['completed_days'].get(week, [])
-                total_completed += len(completed_days)
-            
-            entry_result = data.get('entry_test_result')
-            entry_text = f", Проходка: {entry_result}кг" if entry_result else ""
-            
-            text += f"👤 @{username}{user_info}\n"
-            text += f"   Завершено: {total_completed}/6 дней{entry_text}\n"
-            
-            for week in [1, 2]:
-                completed_days = data['completed_days'].get(week, [])
-                if completed_days:
-                    progress = create_progress_bar(completed_days)
-                    text += f"   Неделя {week}: {progress} ({len(completed_days)}/3)\n"
-            
-            text += "\n"
-    
-    keyboard = [
-        [InlineKeyboardButton("🏠 В главное меню", callback_data="back")]
-    ]
-    
-    await query.edit_message_text(
-        text,
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    # Используем специальный путь для админов через /start admin
+    # Обычная кнопка "Прогресс" теперь показывает личный прогресс
+    await show_progress(update, context)
 
 async def handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Назад в главное меню"""
@@ -894,8 +897,8 @@ def main():
         application.add_handler(CallbackQueryHandler(handle_back, pattern='^back$'))
         application.add_handler(CallbackQueryHandler(handle_week_selection, pattern='^week:'))
         application.add_handler(CallbackQueryHandler(show_maxes, pattern='^maxes$'))
+        application.add_handler(CallbackQueryHandler(show_progress, pattern='^progress$'))  # Добавил обработчик прогресса
         application.add_handler(CallbackQueryHandler(reset_progress, pattern='^reset$'))
-        application.add_handler(CallbackQueryHandler(show_admin_panel, pattern='^admin$'))
         
         # Веса подсобки
         application.add_handler(CallbackQueryHandler(edit_weight, pattern='^edit:'))
