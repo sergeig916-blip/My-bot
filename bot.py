@@ -13,7 +13,7 @@ PORT = int(os.environ.get("PORT", 8080))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://web-production-bd8b.up.railway.app")
 
 # Состояния для ConversationHandler
-SELECT_WEEK, REVIEW_ACCESSORY_WEIGHTS, EDIT_WEIGHT = range(3)
+SELECT_WEEK, REVIEW_ACCESSORY_WEIGHTS, EDIT_WEIGHT, ENTRY_TEST = range(4)
 
 # ========== ЛОГИРОВАНИЕ ==========
 logging.basicConfig(
@@ -145,7 +145,8 @@ def get_user_state(user_id: int) -> Dict:
             'accessory_weights': DEFAULT_ACCESSORY_WEIGHTS.copy(),
             'current_week': None,
             'editing_exercise': None,
-            'editing_weight': None
+            'editing_weight': None,
+            'entry_test_result': None  # результат проходки по жиму
         }
     return user_data[user_id]
 
@@ -201,6 +202,7 @@ def get_accessory_exercises_for_week(week_number: int) -> List[Dict]:
     
     return exercises
 
+# ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
 async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать выбор недели"""
     user_id = update.effective_user.id
@@ -239,13 +241,41 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return SELECT_WEEK
 
+async def handle_select_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора недели (исправленная версия)"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем номер недели из callback_data
+    week_number = int(query.data.split(":")[1])
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    # Проверяем, завершена ли неделя
+    completed_days = user_state['completed_days'].get(week_number, [])
+    
+    if len(completed_days) == 3 or week_number in user_state.get('completed_weeks', []):
+        # Неделя уже завершена, показываем дни без настройки весов
+        await show_days_for_week(update, context, week_number)
+        return SELECT_WEEK
+    else:
+        # Неделя не завершена, показываем настройку весов
+        return await review_accessory_weights(update, context)
+
 async def review_accessory_weights(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать веса подсобки для редактирования"""
     query = update.callback_query
     await query.answer()
     
     # Получаем номер недели из callback_data
-    week_number = int(query.data.split(":")[1])
+    if ":" in query.data:
+        week_number = int(query.data.split(":")[1])
+    else:
+        # Если неделя передана в контексте (например, после завершения недели 1)
+        user_id = query.from_user.id
+        user_state = get_user_state(user_id)
+        week_number = user_state.get('current_week', 2)  # По умолчанию неделя 2
+    
     user_id = query.from_user.id
     user_state = get_user_state(user_id)
     
@@ -633,15 +663,22 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if week_number < 2:  # Если это не последняя неделя
             text += f"Готов перейти к <b>неделе {week_number + 1}</b>?\n"
             keyboard = [
-                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"select_week:{week_number + 1}")],
+                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"go_to_next_week:{week_number + 1}")],
                 [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")]
             ]
         else:  # Если это последняя неделя
-            text += "🏆 <b>Ты завершил все недели тренировок!</b>\n"
-            keyboard = [
-                [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")],
-                [InlineKeyboardButton("🔄 Начать заново", callback_data="reset_progress")]
-            ]
+            text += "🏆 <b>Ты завершил все недели тренировок!</b>\n\n"
+            text += "📊 <b>Время для проходки по жиму лежа!</b>\n"
+            text += "Введи свой результат в жиме лежа (кг):\n"
+            text += "<i>Например: 120 или 122.5</i>"
+            
+            await query.edit_message_text(
+                text,
+                parse_mode='HTML'
+            )
+            
+            # Переходим в состояние ввода результата проходки
+            return ENTRY_TEST
     else:
         # Показываем кнопки для выбора следующего дня
         keyboard = []
@@ -653,25 +690,96 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton(label, callback_data=callback_data)])
         
         keyboard.append([InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")])
+        
+        await query.edit_message_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     
-    await query.edit_message_text(
-        text,
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    return SELECT_WEEK
+
+async def go_to_next_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переход к следующей неделе (исправленная версия)"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем номер следующей недели
+    week_number = int(query.data.split(":")[1])
+    
+    # Сохраняем неделю в состоянии пользователя
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    user_state['current_week'] = week_number
+    
+    # Показываем настройку весов для следующей недели
+    return await review_accessory_weights(update, context)
+
+async def save_entry_test_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранить результат проходки по жиму"""
+    user_id = update.message.from_user.id
+    user_state = get_user_state(user_id)
+    
+    try:
+        result = float(update.message.text.replace(',', '.'))
+        
+        if result < 50 or result > 300:
+            await update.message.reply_text("❌ Результат должен быть от 50 до 300 кг. Попробуй снова:")
+            return ENTRY_TEST
+        
+        # Сохраняем результат
+        user_state['entry_test_result'] = result
+        
+        # Обновляем максимум по жиму
+        USER_MAXES['bench'] = result
+        
+        text = (
+            "🏆 <b>Отличный результат!</b>\n\n"
+            f"Твой новый максимум в жиме лежа: <b>{result}кг</b>\n\n"
+            "Теперь программа будет использовать этот вес для расчета тренировок.\n\n"
+            "Что дальше?\n"
+            "• Пройди программу заново с новым максимумом\n"
+            "• Или сделай перерыв и продолжай позже\n\n"
+            "<i>Твой прогресс сохранен</i>"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Начать заново", callback_data="reset_progress")],
+            [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")]
+        ]
+        
+        await update.message.reply_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        return SELECT_WEEK
+        
+    except ValueError:
+        await update.message.reply_text("❌ Пожалуйста, введи число (например: 120 или 122.5):")
+        return ENTRY_TEST
 
 async def show_maxes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать максимумы"""
     query = update.callback_query
     await query.answer()
     
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
     text = (
         "<b>📊 Твои максимумы:</b>\n\n"
         f"• Жим лежа: {USER_MAXES['bench']}кг\n"
         f"• Присед: {USER_MAXES['squat']}кг\n"
         f"• Становая: {USER_MAXES['deadlift']}кг\n\n"
-        "<i>Для изменения максимумов обратитесь к администратору</i>"
     )
+    
+    # Показываем результат проходки, если есть
+    if user_state.get('entry_test_result'):
+        text += f"<b>Последняя проходка по жиму:</b> {user_state['entry_test_result']}кг\n\n"
+    
+    text += "<i>Для изменения максимумов обратитесь к администратору</i>"
     
     keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="menu:main")]]
     
@@ -689,7 +797,7 @@ async def reset_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     user_state = get_user_state(user_id)
     
-    # Сбрасываем прогресс и веса
+    # Сбрасываем прогресс и веса (но не результат проходки)
     user_state['completed_days'] = {}
     user_state['completed_weeks'] = []
     user_state['accessory_weights'] = DEFAULT_ACCESSORY_WEIGHTS.copy()
@@ -701,7 +809,8 @@ async def reset_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "🔄 <b>Прогресс сброшен!</b>\n\n"
-        "Все завершенные тренировки и настройки весов очищены.\n\n"
+        "Все завершенные тренировки и настройки весов очищены.\n"
+        "<i>Результат проходки сохранен</i>\n\n"
         "Выбери неделю для начала:",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -763,10 +872,11 @@ def main():
             ],
             states={
                 SELECT_WEEK: [
-                    CallbackQueryHandler(review_accessory_weights, pattern='^select_week:'),
+                    CallbackQueryHandler(handle_select_week, pattern='^select_week:'),
                     CallbackQueryHandler(show_maxes, pattern='^menu:maxes$'),
                     CallbackQueryHandler(reset_progress, pattern='^reset_progress$'),
-                    CallbackQueryHandler(show_week_selection, pattern='^menu:main$')
+                    CallbackQueryHandler(show_week_selection, pattern='^menu:main$'),
+                    CallbackQueryHandler(go_to_next_week, pattern='^go_to_next_week:')
                 ],
                 REVIEW_ACCESSORY_WEIGHTS: [
                     CallbackQueryHandler(edit_weight_prompt, pattern='^edit_weight:'),
@@ -780,6 +890,9 @@ def main():
                     CallbackQueryHandler(back_to_review, pattern='^back_to_review:'),
                     CallbackQueryHandler(edit_weight_prompt, pattern='^edit_weight:'),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, save_weight)
+                ],
+                ENTRY_TEST: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, save_entry_test_result)
                 ]
             },
             fallbacks=[
