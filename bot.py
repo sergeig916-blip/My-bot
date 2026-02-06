@@ -1,8 +1,8 @@
 import os
 import logging
-import asyncio
 import json
 import sys
+import time
 from typing import Dict, Any
 
 import psycopg2
@@ -13,7 +13,6 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")  # https://ваш-проект.railway.app/
-PORT = int(os.environ.get("PORT", 8080))  # Railway использует порт из переменной PORT
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 # ========== ЛОГИРОВАНИЕ ==========
@@ -768,9 +767,18 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-async def setup_webhook(application):
-    """Настройка webhook"""
-    if WEBHOOK_URL and WEBHOOK_URL.strip():
+async def setup_webhook():
+    """Настройка webhook для Telegram"""
+    if not WEBHOOK_URL or not WEBHOOK_URL.strip():
+        logger.warning("⚠️ WEBHOOK_URL не указан, webhook не настроен")
+        return False
+    
+    try:
+        # Создаем временное приложение только для установки webhook
+        from telegram import Bot
+        
+        bot = Bot(token=BOT_TOKEN)
+        
         # Убедимся, что URL начинается с https://
         webhook_url = WEBHOOK_URL.rstrip('/')
         if not webhook_url.startswith('http'):
@@ -779,79 +787,98 @@ async def setup_webhook(application):
         webhook_url = f"{webhook_url}/{BOT_TOKEN}"
         logger.info(f"🌐 Настройка webhook на: {webhook_url}")
         
-        await application.bot.set_webhook(
+        # Ждем 2 секунды чтобы избежать Flood control
+        time.sleep(2)
+        
+        # Устанавливаем webhook
+        await bot.set_webhook(
             url=webhook_url,
             drop_pending_updates=True
         )
+        
         logger.info("✅ Webhook установлен")
+        
+        # Проверяем, что webhook установлен
+        webhook_info = await bot.get_webhook_info()
+        logger.info(f"📊 Webhook информация: {webhook_info.url}")
+        
         return True
-    else:
-        logger.warning("⚠️ WEBHOOK_URL не указан, webhook не настроен")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при настройке webhook: {e}")
+        
+        # Если это Flood control, ждем и пробуем снова
+        if "Flood control" in str(e) or "RetryAfter" in str(e):
+            logger.info("⏳ Жду 3 секунды из-за Flood control...")
+            time.sleep(3)
+            return await setup_webhook()
+        
         return False
 
-def run_bot():
-    """Запуск бота - ОСНОВНАЯ ФУНКЦИЯ ДЛЯ RAILWAY"""
+def create_application():
+    """Создание и настройка приложения бота"""
+    logger.info("🔧 Создание приложения...")
+    
+    # Инициализируем базу данных
+    init_database()
+    
+    # Создаем приложение
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Регистрируем обработчики
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CallbackQueryHandler(show_maxes, pattern='^menu:maxes$'))
+    application.add_handler(CallbackQueryHandler(show_week_menu, pattern='^menu:'))
+    application.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
+    application.add_handler(CallbackQueryHandler(handle_weights_decision, pattern='^weights:'))
+    application.add_handler(CallbackQueryHandler(handle_weight_change, pattern='^weight:change:'))
+    application.add_handler(CallbackQueryHandler(handle_weight_skip, pattern='^weight:skip:'))
+    application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
+    
+    # Обработчик ошибок
+    application.add_error_handler(error_handler)
+    
+    logger.info("✅ Приложение создано и настроено")
+    return application
+
+async def main():
+    """Основная асинхронная функция"""
     logger.info("🚀 Запуск бота...")
     
     try:
-        # Инициализируем базу данных
-        init_database()
+        # Настраиваем webhook
+        webhook_set = await setup_webhook()
         
-        # Создаем приложение
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Регистрируем обработчики
-        application.add_handler(CommandHandler('start', start))
-        application.add_handler(CallbackQueryHandler(show_maxes, pattern='^menu:maxes$'))
-        application.add_handler(CallbackQueryHandler(show_week_menu, pattern='^menu:'))
-        application.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
-        application.add_handler(CallbackQueryHandler(handle_weights_decision, pattern='^weights:'))
-        application.add_handler(CallbackQueryHandler(handle_weight_change, pattern='^weight:change:'))
-        application.add_handler(CallbackQueryHandler(handle_weight_skip, pattern='^weight:skip:'))
-        application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
-        
-        # Обработчик ошибок
-        application.add_error_handler(error_handler)
-        
-        logger.info("✅ Все обработчики зарегистрированы")
-        
-        # Запускаем бота в зависимости от режима
-        if WEBHOOK_URL and WEBHOOK_URL.strip():
-            # Режим webhook для Railway
-            logger.info("🌐 Запуск в режиме webhook...")
+        if webhook_set:
+            logger.info("🎯 Webhook успешно настроен. Бот готов к работе!")
             
-            # Создаем event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Создаем приложение
+            application = create_application()
             
-            # Запускаем webhook
-            loop.run_until_complete(application.initialize())
-            loop.run_until_complete(setup_webhook(application))
-            loop.run_until_complete(application.start())
+            # Инициализируем приложение (но не запускаем сервер!)
+            await application.initialize()
             
-            # Запускаем сервер для обработки webhook
-            logger.info(f"🤖 Бот запущен в режиме webhook на порту {PORT}")
+            # Запускаем приложение в режиме webhook
+            # В Railway нам не нужно запускать сервер - Railway сам обрабатывает HTTP
+            logger.info("🤖 Бот готов принимать обновления через webhook")
             
-            # Запускаем сервер с правильными параметрами для Railway
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                webhook_url="",  # Не нужно, уже настроен выше
-                drop_pending_updates=True
-            )
-            
+            # Бесконечное ожидание (приложение будет обрабатывать запросы через webhook)
+            while True:
+                await asyncio.sleep(3600)  # Спим 1 час
+                
         else:
-            # Режим polling для локальной разработки
-            logger.warning("⚠️ Запуск в режиме polling (только для разработки!)")
-            application.run_polling(
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES
-            )
+            logger.error("❌ Не удалось настроить webhook")
             
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}")
-        raise
+
+def run_bot():
+    """Точка входа для Railway"""
+    logger.info("🚀 Запуск бота на Railway...")
+    
+    # Запускаем асинхронную функцию
+    asyncio.run(main())
 
 if __name__ == '__main__':
-    # ПРЯМОЙ ЗАПУСК ДЛЯ RAILWAY
+    # Для Railway: просто запускаем бота
     run_bot()
