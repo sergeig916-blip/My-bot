@@ -2,13 +2,14 @@ import os
 import logging
 import sys
 import asyncio
-import time
+from aiohttp import web
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4")
+PORT = int(os.environ.get("PORT", 8080))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://web-production-bd8b.up.railway.app/")
 
 # ========== ЛОГИРОВАНИЕ ==========
@@ -136,6 +137,8 @@ def create_progress_bar(completed_days):
 # ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    
     keyboard = [
         [InlineKeyboardButton("🏋️ Неделя 1", callback_data="menu:week:1")],
         [InlineKeyboardButton("🏋️ Неделя 2", callback_data="menu:week:2")],
@@ -152,6 +155,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_maxes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать максимумы"""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    
     query = update.callback_query
     await query.answer()
     
@@ -170,6 +175,8 @@ async def show_maxes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_week_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать меню недели"""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    
     query = update.callback_query
     await query.answer()
     
@@ -203,6 +210,8 @@ async def show_week_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора дня"""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    
     query = update.callback_query
     await query.answer()
     
@@ -271,11 +280,26 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+async def health_check(request):
+    """Проверка здоровья для Railway"""
+    return web.Response(text='OK')
+
+async def handle_webhook(request):
+    """Обработка входящих запросов от Telegram"""
+    if request.method == "POST":
+        # Получаем обновление от Telegram
+        data = await request.json()
+        update = Update.de_json(data, app.bot)
+        
+        # Обрабатываем обновление
+        await app.update_queue.put(update)
+        
+        return web.Response(text='OK')
+    return web.Response(text='Method not allowed', status=405)
+
 async def setup_webhook():
     """Настройка webhook для Telegram"""
     try:
-        bot = Bot(token=BOT_TOKEN)
-        
         # Убедимся, что URL правильный
         webhook_url = WEBHOOK_URL.rstrip('/')
         if not webhook_url.startswith('http'):
@@ -287,7 +311,7 @@ async def setup_webhook():
         # Ждем чтобы избежать Flood control
         await asyncio.sleep(2)
         
-        await bot.set_webhook(
+        await app.bot.set_webhook(
             url=webhook_url,
             drop_pending_updates=True
         )
@@ -295,7 +319,7 @@ async def setup_webhook():
         logger.info("✅ Webhook установлен")
         
         # Проверяем
-        webhook_info = await bot.get_webhook_info()
+        webhook_info = await app.bot.get_webhook_info()
         logger.info(f"📊 Webhook информация: {webhook_info.url}")
         
         return True
@@ -311,30 +335,35 @@ async def setup_webhook():
         
         return False
 
-def create_application():
-    """Создание приложения бота"""
-    logger.info("🔧 Создание приложения...")
-    
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Регистрируем обработчики
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CallbackQueryHandler(show_maxes, pattern='^menu:maxes$'))
-    application.add_handler(CallbackQueryHandler(show_week_menu, pattern='^menu:'))
-    application.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
-    application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
-    
-    # Обработчик ошибок
-    application.add_error_handler(error_handler)
-    
-    logger.info("✅ Приложение создано и настроено")
-    return application
+# Глобальная переменная для приложения
+app = None
 
 async def main():
     """Основная асинхронная функция"""
+    global app
+    
     logger.info("🚀 Запуск бота...")
     
     try:
+        # Создаем приложение
+        app = Application.builder().token(BOT_TOKEN).build()
+        
+        # Регистрируем обработчики
+        app.add_handler(CommandHandler('start', start))
+        app.add_handler(CallbackQueryHandler(show_maxes, pattern='^menu:maxes$'))
+        app.add_handler(CallbackQueryHandler(show_week_menu, pattern='^menu:'))
+        app.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
+        app.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
+        
+        # Обработчик ошибок
+        app.add_error_handler(error_handler)
+        
+        # Инициализируем приложение
+        await app.initialize()
+        await app.start()
+        
+        logger.info("✅ Приложение создано и настроено")
+        
         # Настраиваем webhook
         webhook_set = await setup_webhook()
         
@@ -342,23 +371,35 @@ async def main():
             logger.error("❌ Не удалось настроить webhook")
             return
         
-        # Создаем приложение
-        application = create_application()
+        # Создаем HTTP сервер для обработки запросов
+        server = web.Application()
+        server.add_routes([
+            web.get('/health', health_check),
+            web.post(f'/{BOT_TOKEN}', handle_webhook),
+            web.get('/', health_check)
+        ])
         
-        # Инициализируем приложение (но не запускаем сервер!)
-        await application.initialize()
+        runner = web.AppRunner(server)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
         
-        logger.info("🎯 Webhook успешно настроен. Бот готов к работе!")
-        logger.info("🤖 Бот готов принимать обновления через webhook")
+        logger.info(f"🌐 HTTP сервер запущен на порту {PORT}")
+        logger.info("🎯 Бот готов к работе!")
         
-        # Просто ждем - Railway сам обрабатывает HTTP запросы
-        # Бот будет получать обновления через webhook
+        await site.start()
+        
+        # Бесконечный цикл
         while True:
-            await asyncio.sleep(3600)  # Спим 1 час
+            await asyncio.sleep(3600)
             
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}")
         raise
+    finally:
+        # Очистка при завершении
+        if app:
+            await app.stop()
+            await app.shutdown()
 
 def run_bot():
     """Точка входа для Railway"""
