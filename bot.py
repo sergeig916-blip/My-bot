@@ -4,20 +4,12 @@ import sys
 from typing import Dict, List
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4")
 PORT = int(os.environ.get("PORT", 8080))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://web-production-bd8b.up.railway.app")
-
-# ========== БЕЛЫЙ СПИСОК ПОЛЬЗОВАТЕЛЕЙ ==========
-# Добавьте сюда ID пользователей, которым разрешен доступ
-# Чтобы узнать ID пользователя: @userinfobot в Telegram
-WHITELIST = [
-    123456789,  # Ваш ID (замените на реальный)
-    # Добавьте сюда ID друзей для тестирования
-]
 
 # ========== ЛОГИРОВАНИЕ ==========
 logging.basicConfig(
@@ -122,36 +114,6 @@ TRAINING_PROGRAM = {
 user_data = {}
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def check_access(user_id: int) -> bool:
-    """Проверить доступ пользователя"""
-    return user_id in WHITELIST
-
-async def check_and_respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверить доступ и ответить если нет прав"""
-    user_id = update.effective_user.id
-    
-    if not check_access(user_id):
-        # Записываем попытку доступа в логи
-        username = update.effective_user.username or "без username"
-        first_name = update.effective_user.first_name or "неизвестно"
-        logger.warning(f"Попытка доступа от неподтвержденного пользователя: {user_id} (@{username}, {first_name})")
-        
-        # Отправляем сообщение пользователю
-        message = (
-            "🚫 <b>Доступ запрещен</b>\n\n"
-            "Это приватный бот. Только избранные пользователи могут им пользоваться.\n\n"
-            "Если вы должны иметь доступ, свяжитесь с администратором."
-        )
-        
-        if update.callback_query:
-            await update.callback_query.answer("🚫 Доступ запрещен", show_alert=True)
-        else:
-            await update.message.reply_text(message, parse_mode='HTML')
-        
-        return False
-    
-    return True
-
 def get_user_state(user_id: int) -> Dict:
     """Получить состояние пользователя"""
     if user_id not in user_data:
@@ -214,10 +176,7 @@ def get_accessory_exercises_for_week(week_number: int) -> List[Dict]:
 
 # ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start с проверкой доступа"""
-    if not await check_and_respond(update, context):
-        return
-    
+    """Команда /start"""
     user = update.effective_user
     user_id = user.id
     
@@ -226,37 +185,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state['first_name'] = user.first_name
     user_state['last_name'] = user.last_name
     
-    # Логируем успешный доступ
-    logger.info(f"Пользователь {user_id} (@{user.username}) начал работу с ботом")
-    
     if context.args and context.args[0] == 'admin':
         return await show_admin_panel(update, context)
     
     return await show_week_selection(update, context)
 
-async def auto_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Автостарт при любом сообщении"""
-    if not await check_and_respond(update, context):
-        return
-    
-    # Проверяем, есть ли у пользователя данные
-    user_id = update.effective_user.id
-    user_state = get_user_state(user_id)
-    
-    # Если пользователь первый раз, сохраняем данные
-    if not user_state['username']:
-        user = update.effective_user
-        user_state['username'] = user.username
-        user_state['first_name'] = user.first_name
-        user_state['last_name'] = user.last_name
-    
-    return await show_week_selection(update, context)
-
 async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать выбор недели"""
-    if not await check_and_respond(update, context):
-        return
-    
     user_id = update.effective_user.id
     user_state = get_user_state(user_id)
     
@@ -272,10 +207,6 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard.append([InlineKeyboardButton("📊 Мои максимумы", callback_data="maxes")])
     keyboard.append([InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="reset")])
     keyboard.append([InlineKeyboardButton("👁️‍🗨️ Прогресс учеников", callback_data="admin")])
-    
-    # Кнопка для добавления пользователя в белый список (только для админа)
-    if user_id == WHITELIST[0]:  # Первый ID в списке - главный админ
-        keyboard.append([InlineKeyboardButton("➕ Добавить пользователя", callback_data="add_user")])
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
@@ -295,9 +226,6 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора недели"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -319,9 +247,6 @@ async def handle_week_selection(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def show_accessory_weights(update: Update, context: ContextTypes.DEFAULT_TYPE, week_number: int):
     """Показать веса подсобки"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     user_id = query.from_user.id
     user_state = get_user_state(user_id)
@@ -360,9 +285,6 @@ async def show_accessory_weights(update: Update, context: ContextTypes.DEFAULT_T
 
 async def edit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Изменение веса"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -405,9 +327,6 @@ async def edit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def adjust_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Регулировка веса"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -457,9 +376,6 @@ async def adjust_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_week_training(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начать тренировку недели"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -468,9 +384,6 @@ async def start_week_training(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def show_days_for_week(update: Update, context: ContextTypes.DEFAULT_TYPE, week_number: int):
     """Показать дни недели"""
-    if not await check_and_respond(update, context):
-        return
-    
     user_id = update.effective_user.id
     user_state = get_user_state(user_id)
     
@@ -509,9 +422,6 @@ async def show_days_for_week(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора дня"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -572,9 +482,6 @@ async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Завершить тренировку"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -641,9 +548,6 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def adjust_bench(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Регулировка жима"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -680,9 +584,6 @@ async def adjust_bench(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def confirm_bench(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Подтвердить результат жима"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -716,9 +617,6 @@ async def confirm_bench(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_new_cycle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начать новый цикл"""
-    if not await check_and_respond(update, context):
-        return
-    
     query = update.callback_query
     await query.answer()
     
@@ -745,4 +643,202 @@ async def start_new_cycle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def show_maxes(update: Update, context: ContextTypes
+async def show_maxes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать максимумы"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    text = (
+        "<b>📊 Твои максимумы:</b>\n\n"
+        f"• Жим лежа: {USER_MAXES['bench']}кг\n"
+        f"• Присед: {USER_MAXES['squat']}кг\n"
+        f"• Становая: {USER_MAXES['deadlift']}кг\n\n"
+    )
+    
+    if user_state.get('entry_test_result'):
+        text += f"<b>Последняя проходка по жиму:</b> {user_state['entry_test_result']}кг\n\n"
+    
+    text += "<i>Для изменения максимумов обратитесь к администратору</i>"
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back")]]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def reset_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сбросить прогресс"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    user_state['completed_days'] = {}
+    user_state['accessory_weights'] = DEFAULT_ACCESSORY_WEIGHTS.copy()
+    
+    keyboard = [
+        [InlineKeyboardButton("🏋️ Неделя 1", callback_data="week:1")],
+        [InlineKeyboardButton("🏋️ Неделя 2", callback_data="week:2")]
+    ]
+    
+    await query.edit_message_text(
+        "🔄 <b>Прогресс сброшен!</b>\n\n"
+        "Все завершенные тренировки и настройки весов очищены.\n"
+        f"Текущий максимум в жиме: <b>{USER_MAXES['bench']}кг</b>\n\n"
+        "Выбери неделю для начала:",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Панель администратора"""
+    query = update.callback_query
+    await query.answer()
+    
+    if len(user_data) == 0:
+        text = "📊 <b>Панель администратора</b>\n\nПока нет активных пользователей."
+    else:
+        text = "<b>📊 Прогресс учеников:</b>\n\n"
+        
+        for uid, data in user_data.items():
+            username = data.get('username', 'Без username')
+            first_name = data.get('first_name', '')
+            last_name = data.get('last_name', '')
+            
+            user_info = f"{first_name} {last_name}".strip()
+            if user_info:
+                user_info = f" ({user_info})"
+            
+            total_completed = 0
+            for week in [1, 2]:
+                completed_days = data['completed_days'].get(week, [])
+                total_completed += len(completed_days)
+            
+            entry_result = data.get('entry_test_result')
+            entry_text = f", Проходка: {entry_result}кг" if entry_result else ""
+            
+            text += f"👤 @{username}{user_info}\n"
+            text += f"   Завершено: {total_completed}/6 дней{entry_text}\n"
+            
+            for week in [1, 2]:
+                completed_days = data['completed_days'].get(week, [])
+                if completed_days:
+                    progress = create_progress_bar(completed_days)
+                    text += f"   Неделя {week}: {progress} ({len(completed_days)}/3)\n"
+            
+            text += "\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🏠 В главное меню", callback_data="back")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Назад в главное меню"""
+    query = update.callback_query
+    await query.answer()
+    
+    await show_week_selection(update, context)
+
+async def handle_noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пустой обработчик"""
+    query = update.callback_query
+    await query.answer()
+
+async def handle_weights(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вернуться к весам"""
+    query = update.callback_query
+    await query.answer()
+    
+    week_number = int(query.data.split(":")[1])
+    await show_accessory_weights(update, context, week_number)
+
+async def handle_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вернуться к дням"""
+    query = update.callback_query
+    await query.answer()
+    
+    week_number = int(query.data.split(":")[1])
+    await show_days_for_week(update, context, week_number)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Ошибка: {context.error}")
+    
+    try:
+        if update.callback_query:
+            await update.callback_query.answer("⚠️ Произошла ошибка. Попробуй /start")
+    except:
+        pass
+
+# ========== ОСНОВНАЯ ФУНКЦИЯ ==========
+def main():
+    """Основная функция запуска бота"""
+    logger.info("🚀 Запуск бота на Railway...")
+    
+    try:
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Регистрируем обработчики (УПРОЩЕННАЯ ВЕРСИЯ)
+        # Главное меню
+        application.add_handler(CommandHandler('start', start))
+        
+        # Основные callback обработчики
+        application.add_handler(CallbackQueryHandler(show_week_selection, pattern='^back$'))
+        application.add_handler(CallbackQueryHandler(handle_week_selection, pattern='^week:'))
+        application.add_handler(CallbackQueryHandler(show_maxes, pattern='^maxes$'))
+        application.add_handler(CallbackQueryHandler(reset_progress, pattern='^reset$'))
+        application.add_handler(CallbackQueryHandler(show_admin_panel, pattern='^admin$'))
+        
+        # Веса подсобки
+        application.add_handler(CallbackQueryHandler(edit_weight, pattern='^edit:'))
+        application.add_handler(CallbackQueryHandler(adjust_weight, pattern='^adjust:'))
+        application.add_handler(CallbackQueryHandler(handle_weights, pattern='^weights:'))
+        application.add_handler(CallbackQueryHandler(start_week_training, pattern='^start_week:'))
+        
+        # Дни тренировки
+        application.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
+        application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
+        application.add_handler(CallbackQueryHandler(handle_days, pattern='^days:'))
+        
+        # Проходка по жиму
+        application.add_handler(CallbackQueryHandler(adjust_bench, pattern='^bench:'))
+        application.add_handler(CallbackQueryHandler(confirm_bench, pattern='^confirm_bench:'))
+        application.add_handler(CallbackQueryHandler(start_new_cycle, pattern='^new_cycle$'))
+        
+        # Пустой обработчик
+        application.add_handler(CallbackQueryHandler(handle_noop, pattern='^noop$'))
+        
+        # Обработчик ошибок
+        application.add_error_handler(error_handler)
+        
+        logger.info("✅ Приложение создано и настроено")
+        
+        webhook_url = f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}"
+        logger.info(f"🌐 Настройка webhook на: {webhook_url}")
+        
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=webhook_url,
+            drop_pending_updates=True
+        )
+        
+    except Exception as e:
+        logger.error(f"💥 Критическая ошибка: {e}")
+        raise
+
+if __name__ == '__main__':
+    main()
