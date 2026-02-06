@@ -2,166 +2,56 @@ import os
 import json
 import logging
 import sys
-from typing import Dict, List, Optional, Tuple
-from enum import Enum
-from dataclasses import dataclass, asdict
-from datetime import datetime
-import asyncio
+from typing import Dict, List
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.constants import ParseMode
-
-# ========== КОНСТАНТЫ И ПЕРЕЧИСЛЕНИЯ ==========
-class CallbackAction(Enum):
-    BACK = "back"
-    WEEK = "week"
-    MAXES = "maxes"
-    RESET = "reset"
-    ADMIN = "admin"
-    EDIT = "edit"
-    ADJUST = "adjust"
-    WEIGHTS = "weights"
-    START_WEEK = "start_week"
-    DAY = "day"
-    COMPLETE = "complete"
-    DAYS = "days"
-    BENCH = "bench"
-    CONFIRM_BENCH = "confirm_bench"
-    NEW_CYCLE = "new_cycle"
-    NOOP = "noop"
-    MARK_SET = "mark_set"
-
-class ExerciseType(Enum):
-    BASE = "base"
-    ACCESSORY = "accessory"
 
 # ========== КОНФИГУРАЦИЯ ==========
+# Безопасно получаем токен
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не установлен в переменных окружения")
+    # Фолбэк на старый токен ТОЛЬКО для совместимости
+    # После настройки удали эту строку!
+    BOT_TOKEN = "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4"
+    logging.warning("⚠️ Используется дефолтный токен. Настрой BOT_TOKEN в переменных окружения!")
 
 PORT = int(os.environ.get("PORT", 8080))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-ADMIN_IDS = json.loads(os.environ.get("ADMIN_IDS", "[]"))
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://web-production-bd8b.up.railway.app")
 
-# ========== МОДЕЛИ ДАННЫХ ==========
-@dataclass
-class Exercise:
-    type: ExerciseType
-    name: str
-    percentage: Optional[float] = None
-    reps: Optional[str] = None
-    sets: Optional[str] = None
-    key: Optional[str] = None
-    completed_sets: int = 0
-
-@dataclass
-class TrainingDay:
-    name: str
-    code: str
-    exercises: List[Exercise]
-
-@dataclass
-class WeekProgram:
-    name: str
-    day_1: TrainingDay
-    day_2: TrainingDay
-    day_3: TrainingDay
-
-@dataclass
-class UserState:
-    user_id: int
-    username: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    completed_days: Dict[int, List[int]] = None
-    accessory_weights: Dict[int, Dict[str, float]] = None
-    entry_test_result: Optional[float] = None
-    last_active: Optional[str] = None
-    
-    def __post_init__(self):
-        if self.completed_days is None:
-            self.completed_days = {}
-        if self.accessory_weights is None:
-            self.accessory_weights = {}
-
-# ========== МЕНЕДЖЕР ДАННЫХ ==========
-class DataManager:
-    _instance = None
-    _user_states: Dict[int, UserState] = {}
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-    
-    def get_user_state(self, user_id: int) -> UserState:
-        if user_id not in self._user_states:
-            self._user_states[user_id] = UserState(
-                user_id=user_id,
-                last_active=datetime.now().isoformat()
-            )
-        else:
-            self._user_states[user_id].last_active = datetime.now().isoformat()
-        return self._user_states[user_id]
-    
-    def save_user_state(self, user_state: UserState):
-        self._user_states[user_state.user_id] = user_state
-    
-    def get_all_users(self) -> List[UserState]:
-        return list(self._user_states.values())
-    
-    def reset_user_progress(self, user_id: int):
-        if user_id in self._user_states:
-            self._user_states[user_id].completed_days = {}
-            # Сброс весов до дефолтных значений происходит в другом месте
-
-# ========== ЗАГРУЗКА КОНФИГУРАЦИИ ==========
-def load_config() -> Tuple[Dict, Dict, Dict]:
-    """Загрузка конфигурации из JSON файлов"""
+# ========== ЗАГРУЗКА ДАННЫХ ИЗ JSON ==========
+def load_json_data():
+    """Загружает данные из JSON файлов"""
     try:
         with open('training_program.json', 'r', encoding='utf-8') as f:
-            training_program = json.load(f)
+            TRAINING_PROGRAM = json.load(f)
         
         with open('default_weights.json', 'r', encoding='utf-8') as f:
-            default_weights = json.load(f)
+            DEFAULT_ACCESSORY_WEIGHTS = json.load(f)
         
         with open('user_maxes.json', 'r', encoding='utf-8') as f:
-            user_maxes = json.load(f)
+            USER_MAXES = json.load(f)
         
-        # Конвертация в объекты
-        program = {}
-        for week_num, week_data in training_program.items():
-            program[int(week_num)] = WeekProgram(
-                name=week_data['name'],
-                day_1=TrainingDay(
-                    name=week_data['day_1']['name'],
-                    code=week_data['day_1']['code'],
-                    exercises=[Exercise(**ex) for ex in week_data['day_1']['exercises']]
-                ),
-                day_2=TrainingDay(
-                    name=week_data['day_2']['name'],
-                    code=week_data['day_2']['code'],
-                    exercises=[Exercise(**ex) for ex in week_data['day_2']['exercises']]
-                ),
-                day_3=TrainingDay(
-                    name=week_data['day_3']['name'],
-                    code=week_data['day_3']['code'],
-                    exercises=[Exercise(**ex) for ex in week_data['day_3']['exercises']]
-                )
-            )
+        # Конвертируем ключи в int для TRAINING_PROGRAM
+        TRAINING_PROGRAM = {int(k): v for k, v in TRAINING_PROGRAM.items()}
         
-        return program, default_weights, user_maxes
+        # Конвертируем ключи в int для DEFAULT_ACCESSORY_WEIGHTS
+        DEFAULT_ACCESSORY_WEIGHTS = {int(k): v for k, v in DEFAULT_ACCESSORY_WEIGHTS.items()}
         
-    except FileNotFoundError:
-        # Загрузка из кода (запасной вариант)
-        return _load_default_config()
+        return TRAINING_PROGRAM, DEFAULT_ACCESSORY_WEIGHTS, USER_MAXES
+        
+    except FileNotFoundError as e:
+        logging.error(f"❌ Файл не найден: {e}")
+        # Возвращаем пустые структуры, код будет использовать старые данные
+        return {}, {}, {}
 
-def _load_default_config():
-    """Запасная загрузка конфигурации"""
+# Загружаем данные
+TRAINING_PROGRAM, DEFAULT_ACCESSORY_WEIGHTS, USER_MAXES = load_json_data()
+
+# Если файлы пустые, используем данные из старого кода
+if not TRAINING_PROGRAM:
+    logging.info("📁 Использую данные из кода")
     USER_MAXES = {'bench': 117.5, 'squat': 125, 'deadlift': 150}
-    
     DEFAULT_ACCESSORY_WEIGHTS = {
         1: {
             'fly_flat': 17.5, 'fly_incline': 17.5, 'reverse_curl': 25.0,
@@ -176,383 +66,860 @@ def _load_default_config():
             'leg_extension': 56.0
         }
     }
-    
-    # Конвертация старого формата в новый
-    program = {}
-    # ... (конвертация TRAINING_PROGRAM в WeekProgram объекты)
-    
-    return program, DEFAULT_ACCESSORY_WEIGHTS, USER_MAXES
+    TRAINING_PROGRAM = {
+        1: {
+            "name": "Неделя 1",
+            "day_1": {
+                "name": "Ноги + Грудь", "code": "Н1Д1",
+                "exercises": [
+                    {"type": "base", "name": "Приседания", "percentage": 50, "reps": 10, "sets": 3},
+                    {"type": "base", "name": "Жим штанги лежа", "percentage": 75, "reps": 3, "sets": 5},
+                    {"type": "accessory", "name": "Разводка гантелей лежа", "key": "fly_flat", "reps": 10, "sets": 3},
+                    {"type": "accessory", "name": "Сгибание рук обратным хватом", "key": "reverse_curl", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""},
+                    {"type": "accessory", "name": "Гиперэкстензия", "reps": 20, "sets": 2}
+                ]
+            },
+            "day_2": {
+                "name": "Спина + Плечи", "code": "Н1Д2",
+                "exercises": [
+                    {"type": "base", "name": "Жим штанги стоя", "percentage": 35, "reps": 6, "sets": 2},
+                    {"type": "accessory", "name": "Гиперэкстензия с весом", "key": "hyperextension_weight", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Тяга вертикального блока", "key": "vertical_pull", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Тяга горизонтального блока", "key": "horizontal_row", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Разводка на заднюю дельту", "key": "rear_delt_fly", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""}
+                ]
+            },
+            "day_3": {
+                "name": "Грудь + Плечи", "code": "Н1Д3",
+                "exercises": [
+                    {"type": "base", "name": "Жим штанги лежа", "percentage": 60, "reps": 5, "sets": 2},
+                    {"type": "base", "name": "Жим на наклонной 30°", "percentage": 50, "reps": 6, "sets": 4},
+                    {"type": "accessory", "name": "Разводка на наклонной", "key": "fly_incline", "reps": 8, "sets": 4},
+                    {"type": "accessory", "name": "Махи гантелей в стороны", "key": "lateral_raise", "reps": 8, "sets": 4},
+                    {"type": "accessory", "name": "Сгибание на бицепс обратным хватом", "key": "reverse_curl", "reps": 8, "sets": 5}
+                ]
+            }
+        },
+        2: {
+            "name": "Неделя 2",
+            "day_1": {
+                "name": "Ноги + Грудь", "code": "Н2Д1",
+                "exercises": [
+                    {"type": "base", "name": "Приседания", "percentage": 55, "reps": 8, "sets": 3},
+                    {"type": "base", "name": "Жим штанги лежа", "percentage": 80, "reps": 3, "sets": 4},
+                    {"type": "accessory", "name": "Разводка гантелей лежа", "key": "fly_flat", "reps": 10, "sets": 3},
+                    {"type": "accessory", "name": "Сгибание рук обратным хватом", "key": "reverse_curl", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""},
+                    {"type": "accessory", "name": "Гиперэкстензия", "reps": 20, "sets": 2}
+                ]
+            },
+            "day_2": {
+                "name": "Спина + Плечи", "code": "Н2Д2",
+                "exercises": [
+                    {"type": "base", "name": "Жим штанги стоя", "percentage": 40, "reps": 6, "sets": 2},
+                    {"type": "accessory", "name": "Гиперэкстензия с весом", "key": "hyperextension_weight", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Тяга вертикального блока", "key": "vertical_pull", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Тяга горизонтального блока", "key": "horizontal_row", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Разводка на заднюю дельту", "key": "rear_delt_fly", "reps": 10, "sets": 4},
+                    {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""}
+                ]
+            },
+            "day_3": {
+                "name": "Грудь + Плечи", "code": "Н2Д3",
+                "exercises": [
+                    {"type": "base", "name": "Жим штанги лежа", "percentage": 65, "reps": 5, "sets": 2},
+                    {"type": "base", "name": "Жим на наклонной 30°", "percentage": 50, "reps": 6, "sets": 4},
+                    {"type": "accessory", "name": "Разводка на наклонной", "key": "fly_incline", "reps": 8, "sets": 4},
+                    {"type": "accessory", "name": "Махи гантелей в стороны", "key": "lateral_raise", "reps": 8, "sets": 4},
+                    {"type": "accessory", "name": "Сгибание на бицепс обратным хватом", "key": "reverse_curl", "reps": 8, "sets": 5}
+                ]
+            }
+        }
+    }
 
-# ========== КЭШ И УТИЛИТЫ ==========
-class CacheManager:
-    def __init__(self):
-        self._cache = {}
-        self._weight_cache = {}
-    
-    def get_cached_weight(self, exercise_name: str, percentage: float) -> float:
-        cache_key = f"{exercise_name}_{percentage}"
-        if cache_key not in self._weight_cache:
-            weight = self._calculate_weight_uncached(exercise_name, percentage)
-            self._weight_cache[cache_key] = weight
-        return self._weight_cache[cache_key]
-    
-    def _calculate_weight_uncached(self, exercise_name: str, percentage: float) -> float:
-        exercise_lower = exercise_name.lower()
-        USER_MAXES = load_config()[2]
-        
-        if "жим" in exercise_lower and "лежа" in exercise_lower:
-            base = USER_MAXES['bench']
-        elif "присед" in exercise_lower:
-            base = USER_MAXES['squat']
-        elif "становая" in exercise_lower:
-            base = USER_MAXES['deadlift']
-        elif "стоя" in exercise_lower:
-            base = USER_MAXES['bench'] * 0.6
-        else:
-            base = USER_MAXES['bench']
-        
-        weight = base * percentage / 100
-        return round(weight / 2.5) * 2.5
-    
-    def clear_cache(self):
-        self._cache.clear()
-        self._weight_cache.clear()
+# ========== ЛОГИРОВАНИЕ ==========
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
 
-# ========== ФОРМАТТЕРЫ ДЛЯ ВИЗУАЛЬНЫХ УЛУЧШЕНИЙ ==========
-class MessageFormatter:
-    @staticmethod
-    def format_exercise_box(exercise: Exercise, weight: Optional[float] = None, 
-                          total_sets: int = 0, completed_sets: int = 0) -> str:
-        """Форматирование упражнения в рамке"""
-        emoji = "🏋️" if exercise.type == ExerciseType.BASE else "💪"
-        color_start = "🟦" if exercise.type == ExerciseType.BASE else "🟩"
-        
-        sets_display = ""
-        if total_sets > 0:
-            sets_progress = "✅" * completed_sets + "⬜" * (total_sets - completed_sets)
-            sets_display = f"\n{sets_progress} ({completed_sets}/{total_sets})"
-        
-        weight_display = ""
-        if weight is not None:
-            weight_display = f"\n📊 Вес: {weight}кг"
-        elif exercise.key:
-            weight_display = "\n📊 Вес: настроить"
-        
+# ========== УТИЛИТЫ ДЛЯ ФОРМАТИРОВАНИЯ ==========
+def format_exercise_box(exercise: Dict, weight: float = None, is_base: bool = False) -> str:
+    """Форматирует упражнение в красивую рамку"""
+    if is_base:
+        border = "🟦"
+        emoji = "🏋️"
+    else:
+        border = "🟩"
+        emoji = "💪"
+    
+    name = exercise['name']
+    reps = exercise['reps']
+    sets = exercise['sets']
+    
+    # Формируем строку с весом
+    weight_str = f"\n📊 Вес: {weight}кг" if weight is not None else ""
+    
+    # Формируем строку с подходами/повторениями
+    if reps and sets:
+        reps_sets = f"\n🔢 {reps} × {sets}"
+    elif reps:
+        reps_sets = f"\n🔢 {reps}"
+    else:
         reps_sets = ""
-        if exercise.reps and exercise.sets:
-            reps_sets = f"\n🔢 {exercise.reps} × {exercise.sets}"
-        elif exercise.reps:
-            reps_sets = f"\n🔢 {exercise.reps}"
-        
-        return (
-            f"{color_start}┏━━━━━━━━━━━━━━━━━━━━━┓\n"
-            f"{emoji} {exercise.name}"
-            f"{weight_display}"
-            f"{reps_sets}"
-            f"{sets_display}\n"
-            f"{color_start}┗━━━━━━━━━━━━━━━━━━━━━┛"
-        )
     
-    @staticmethod
-    def format_training_day(day: TrainingDay, week_weights: Dict[str, float], 
-                          completed_sets: Dict[str, int]) -> str:
-        """Форматирование всего дня тренировки"""
-        header = f"📅 <b>{day.code} • {day.name}</b>\n\n"
-        exercises_text = []
-        
-        for i, exercise in enumerate(day.exercises, 1):
-            weight = None
-            if exercise.type == ExerciseType.BASE and exercise.percentage:
-                weight = CacheManager().get_cached_weight(exercise.name, exercise.percentage)
-            elif exercise.type == ExerciseType.ACCESSORY and exercise.key:
-                weight = week_weights.get(exercise.key, 0)
-            
-            completed = completed_sets.get(f"{day.code}_{i}", 0)
-            total_sets = int(exercise.sets) if exercise.sets and exercise.sets.isdigit() else 0
-            
-            exercises_text.append(
-                f"{i}. {MessageFormatter.format_exercise_box(exercise, weight, total_sets, completed)}"
-            )
-        
-        return header + "\n\n".join(exercises_text)
-    
-    @staticmethod
-    def create_progress_bar(completed_days: List[int]) -> str:
-        """Создание графического прогресс-бара"""
-        progress = ['⬜', '⬜', '⬜']
-        for day_num in completed_days:
-            if 1 <= day_num <= 3:
-                progress[day_num - 1] = '🟩'
-        return ''.join(progress)
-    
-    @staticmethod
-    async def show_loading_indicator(query, text: str = "Загрузка..."):
-        """Показать индикатор загрузки"""
-        try:
-            await query.edit_message_text(
-                f"⏳ {text}",
-                parse_mode=ParseMode.HTML
-            )
-            await asyncio.sleep(0.3)  # Имитация загрузки
-        except:
-            pass
+    return (
+        f"{border}┏━━━━━━━━━━━━━━━━━━━━━┓\n"
+        f"{emoji} {name}"
+        f"{weight_str}"
+        f"{reps_sets}\n"
+        f"{border}┗━━━━━━━━━━━━━━━━━━━━━┛"
+    )
 
-# ========== КЛАВИАТУРЫ ==========
-class KeyboardBuilder:
-    @staticmethod
-    def build_week_selection(user_state: UserState) -> InlineKeyboardMarkup:
-        keyboard = []
-        for week_num in [1, 2]:
-            label = f"🏋️ Неделя {week_num}"
-            completed_days = user_state.completed_days.get(week_num, [])
-            if len(completed_days) == 3:
-                label = f"✅ {label}"
-            
-            keyboard.append([
-                InlineKeyboardButton(
-                    label, 
-                    callback_data=f"{CallbackAction.WEEK.value}:{week_num}"
-                )
-            ])
-        
-        keyboard.extend([
-            [InlineKeyboardButton("📊 Мои максимумы", callback_data=CallbackAction.MAXES.value)],
-            [InlineKeyboardButton("🔄 Сбросить прогресс", callback_data=CallbackAction.RESET.value)],
-            [InlineKeyboardButton("👁️‍🗨️ Прогресс учеников", callback_data=CallbackAction.ADMIN.value)]
-        ])
-        
-        return InlineKeyboardMarkup(keyboard)
+def calculate_weight(exercise_name: str, percentage: float):
+    """Рассчитывает рабочий вес для упражнения"""
+    exercise_lower = exercise_name.lower()
     
-    @staticmethod
-    def build_exercise_controls(week_number: int, day_number: int, exercise_index: int, 
-                              completed_sets: int, total_sets: int) -> InlineKeyboardMarkup:
-        """Клавиатура для отметки выполненных подходов"""
-        keyboard = []
-        
-        if completed_sets < total_sets:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"✅ Подход {completed_sets + 1}/{total_sets}",
-                    callback_data=f"{CallbackAction.MARK_SET.value}:{week_number}:{day_number}:{exercise_index}"
-                )
-            ])
-        
-        keyboard.append([
-            InlineKeyboardButton("⬅️ Назад", callback_data=f"{CallbackAction.DAYS.value}:{week_number}")
-        ])
-        
-        return InlineKeyboardMarkup(keyboard)
+    if "жим" in exercise_lower and "лежа" in exercise_lower:
+        base = USER_MAXES['bench']
+    elif "присед" in exercise_lower:
+        base = USER_MAXES['squat']
+    elif "становая" in exercise_lower:
+        base = USER_MAXES['deadlift']
+    elif "стоя" in exercise_lower:
+        base = USER_MAXES['bench'] * 0.6
+    else:
+        base = USER_MAXES['bench']
+    
+    weight = base * percentage / 100
+    return round(weight / 2.5) * 2.5
+
+def create_progress_bar(completed_days: List[int]) -> str:
+    """Создает графический прогресс-бар"""
+    progress = ['⬜', '⬜', '⬜']
+    for day_num in completed_days:
+        if 1 <= day_num <= 3:
+            progress[day_num - 1] = '🟩'
+    return ''.join(progress)
+
+def get_accessory_exercises_for_week(week_number: int) -> List[Dict]:
+    """Возвращает список подсобных упражнений для недели"""
+    exercises = []
+    week_data = TRAINING_PROGRAM.get(week_number)
+    
+    if not week_data:
+        return exercises
+    
+    seen_keys = set()
+    
+    for day_key in ['day_1', 'day_2', 'day_3']:
+        day_data = week_data.get(day_key, {})
+        for exercise in day_data.get('exercises', []):
+            if exercise['type'] == 'accessory' and 'key' in exercise:
+                key = exercise['key']
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    exercises.append({
+                        'key': key,
+                        'name': exercise['name']
+                    })
+    
+    return exercises
+
+# Хранение пользовательских данных
+user_data = {}
+
+def get_user_state(user_id: int) -> Dict:
+    """Получить состояние пользователя"""
+    if user_id not in user_data:
+        user_data[user_id] = {
+            'completed_days': {},
+            'accessory_weights': DEFAULT_ACCESSORY_WEIGHTS.copy(),
+            'entry_test_result': None,
+            'username': None,
+            'first_name': None,
+            'last_name': None
+        }
+    return user_data[user_id]
 
 # ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
-class BotHandlers:
-    def __init__(self):
-        self.data_manager = DataManager()
-        self.cache_manager = CacheManager()
-        self.formatter = MessageFormatter()
-        self.keyboard_builder = KeyboardBuilder()
-        
-        self.training_program, self.default_weights, self.user_maxes = load_config()
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /start"""
+    user = update.effective_user
+    user_id = user.id
     
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /start"""
-        user = update.effective_user
-        user_state = self.data_manager.get_user_state(user.id)
-        
-        user_state.username = user.username
-        user_state.first_name = user.first_name
-        user_state.last_name = user.last_name
-        
-        self.data_manager.save_user_state(user_state)
-        
-        if context.args and context.args[0] == 'admin':
-            return await self.show_admin_panel(update, context)
-        
-        return await self.show_week_selection(update, context)
+    user_state = get_user_state(user_id)
+    user_state['username'] = user.username
+    user_state['first_name'] = user.first_name
+    user_state['last_name'] = user.last_name
     
-    async def show_week_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать выбор недели"""
-        user_id = update.effective_user.id
-        user_state = self.data_manager.get_user_state(user_id)
-        
-        keyboard = self.keyboard_builder.build_week_selection(user_state)
-        
-        message = (
-            "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\n"
-            "Выбери неделю тренировки:"
-        )
-        
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                message,
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard
-            )
-            await update.callback_query.answer()
-        else:
-            await update.message.reply_text(
-                message,
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard
-            )
+    if context.args and context.args[0] == 'admin':
+        return await show_admin_panel(update, context)
     
-    async def handle_week_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка выбора недели"""
-        query = update.callback_query
-        await self.formatter.show_loading_indicator(query, "Загружаем данные...")
-        
-        week_number = int(query.data.split(":")[1])
-        user_state = self.data_manager.get_user_state(query.from_user.id)
-        user_state.current_week = week_number
-        
-        completed_days = user_state.completed_days.get(week_number, [])
-        
+    return await show_week_selection(update, context)
+
+async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать выбор недели"""
+    user_id = update.effective_user.id
+    user_state = get_user_state(user_id)
+    
+    keyboard = []
+    for week_num in [1, 2]:
+        label = f"🏋️ Неделя {week_num}"
+        completed_days = user_state['completed_days'].get(week_num, [])
         if len(completed_days) == 3:
-            await self.show_days_for_week(update, context, week_number)
-        else:
-            await self.show_accessory_weights(update, context, week_number)
+            label = f"✅ {label}"
+        
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"week:{week_num}")])
     
-    async def mark_set_completed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Отметить выполненный подход"""
-        query = update.callback_query
-        await query.answer()
-        
-        _, week_str, day_str, ex_str = query.data.split(":")
-        week_number = int(week_str)
-        day_number = int(day_str)
-        exercise_index = int(ex_str) - 1
-        
-        # Здесь должна быть логика сохранения выполненного подхода
-        # Временно просто показываем сообщение
-        await query.answer("✅ Подход отмечен!")
-        
-        # Обновляем сообщение
-        await self.handle_day_selection(update, context)
+    keyboard.append([InlineKeyboardButton("📊 Мои максимумы", callback_data="maxes")])
+    keyboard.append([InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="reset")])
+    keyboard.append([InlineKeyboardButton("👁️‍🗨️ Прогресс учеников", callback_data="admin")])
     
-    async def show_admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Панель администратора с проверкой прав"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS and not ADMIN_IDS:
-            await query.answer("⛔ Доступ запрещен")
-            return
-        
-        users = self.data_manager.get_all_users()
-        
-        if not users:
-            text = "📊 <b>Панель администратора</b>\n\nПока нет активных пользователей."
-        else:
-            text = "<b>📊 Прогресс учеников:</b>\n\n"
-            
-            for user_state in users:
-                username = user_state.username or "Без username"
-                first_name = user_state.first_name or ""
-                last_name = user_state.last_name or ""
-                
-                user_info = f"{first_name} {last_name}".strip()
-                if user_info:
-                    user_info = f" ({user_info})"
-                
-                total_completed = 0
-                for week in [1, 2]:
-                    completed_days = user_state.completed_days.get(week, [])
-                    total_completed += len(completed_days)
-                
-                entry_result = user_state.entry_test_result
-                entry_text = f", Проходка: {entry_result}кг" if entry_result else ""
-                
-                text += f"👤 @{username}{user_info}\n"
-                text += f"   Завершено: {total_completed}/6 дней{entry_text}\n"
-                text += f"   Последняя активность: {user_state.last_active[:10]}\n\n"
-        
-        keyboard = [[
-            InlineKeyboardButton("🏠 В главное меню", callback_data=CallbackAction.BACK.value)
-        ]]
-        
-        await query.edit_message_text(
-            text,
-            parse_mode=ParseMode.HTML,
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\n"
+            "Выбери неделю тренировки:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        await update.callback_query.answer()
+    else:
+        await update.message.reply_text(
+            "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\n"
+            "Выбери неделю тренировки:",
+            parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-# ========== НАСТРОЙКА ЛОГГИРОВАНИЯ ==========
-def setup_logging():
-    """Настройка расширенного логирования"""
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO,
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler('bot.log', encoding='utf-8')
-        ]
+async def handle_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора недели"""
+    query = update.callback_query
+    await query.answer()
+    
+    week_number = int(query.data.split(":")[1])
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    user_state['current_week'] = week_number
+    
+    # Проверяем, завершена ли неделя
+    completed_days = user_state['completed_days'].get(week_number, [])
+    
+    if len(completed_days) == 3:
+        # Неделя завершена, показываем дни
+        await show_days_for_week(update, context, week_number)
+    else:
+        # Неделя не завершена, показываем настройку весов
+        await show_accessory_weights(update, context, week_number)
+
+async def show_accessory_weights(update: Update, context: ContextTypes.DEFAULT_TYPE, week_number: int):
+    """Показать веса подсобки"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    exercises = get_accessory_exercises_for_week(week_number)
+    user_weights = user_state['accessory_weights'].get(week_number, DEFAULT_ACCESSORY_WEIGHTS[week_number].copy())
+    
+    text = f"<b>📝 Веса для подсобки (Неделя {week_number})</b>\n\n"
+    
+    keyboard = []
+    for i, exercise in enumerate(exercises, 1):
+        weight = user_weights.get(exercise['key'], 0)
+        text += f"{i}. {exercise['name']}: <b>{weight}кг</b>\n"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{i}. {exercise['name']}",
+                callback_data=f"edit:{week_number}:{exercise['key']}"
+            )
+        ])
+    
+    text += "\nНажми на упражнение, чтобы изменить вес, или продолжи с текущими весами:"
+    
+    keyboard.append([
+        InlineKeyboardButton("✅ Продолжить", callback_data=f"start_week:{week_number}")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Назад", callback_data="back")
+    ])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def edit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Изменение веса"""
+    query = update.callback_query
+    await query.answer()
+    
+    _, week_str, exercise_key = query.data.split(":")
+    week_number = int(week_str)
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    exercises = get_accessory_exercises_for_week(week_number)
+    exercise_name = next((e['name'] for e in exercises if e['key'] == exercise_key), exercise_key)
+    
+    if week_number not in user_state['accessory_weights']:
+        user_state['accessory_weights'][week_number] = DEFAULT_ACCESSORY_WEIGHTS[week_number].copy()
+    
+    current_weight = user_state['accessory_weights'][week_number].get(exercise_key, 0)
+    
+    text = (
+        f"<b>✏️ Изменение веса</b>\n\n"
+        f"Упражнение: {exercise_name}\n"
+        f"Текущий вес: <b>{current_weight}кг</b>\n\n"
+        f"Используй кнопки для изменения (±0.5кг):"
     )
     
-    # Логирование важных действий в отдельный файл
-    audit_logger = logging.getLogger('audit')
-    audit_handler = logging.FileHandler('audit.log', encoding='utf-8')
-    audit_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-    audit_logger.addHandler(audit_handler)
-    audit_logger.setLevel(logging.INFO)
+    keyboard = [
+        [
+            InlineKeyboardButton("➖0.5", callback_data=f"adjust:-0.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton(f"{current_weight}кг", callback_data="noop"),
+            InlineKeyboardButton("➕0.5", callback_data=f"adjust:0.5:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Назад", callback_data=f"weights:{week_number}")
+        ]
+    ]
     
-    return logging.getLogger(__name__), audit_logger
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def adjust_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Регулировка веса"""
+    query = update.callback_query
+    await query.answer()
+    
+    _, adjustment_str, week_str, exercise_key = query.data.split(":")
+    week_number = int(week_str)
+    adjustment = float(adjustment_str)
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    if week_number not in user_state['accessory_weights']:
+        user_state['accessory_weights'][week_number] = DEFAULT_ACCESSORY_WEIGHTS[week_number].copy()
+    
+    current_weight = user_state['accessory_weights'][week_number].get(exercise_key, 0)
+    
+    new_weight = current_weight + adjustment
+    new_weight = max(0, new_weight)
+    new_weight = round(new_weight * 2) / 2
+    
+    user_state['accessory_weights'][week_number][exercise_key] = new_weight
+    
+    exercises = get_accessory_exercises_for_week(week_number)
+    exercise_name = next((e['name'] for e in exercises if e['key'] == exercise_key), exercise_key)
+    
+    text = (
+        f"<b>✏️ Изменение веса</b>\n\n"
+        f"Упражнение: {exercise_name}\n"
+        f"Текущий вес: <b>{new_weight}кг</b>\n\n"
+        f"Используй кнопки для изменения (±0.5кг):"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("➖0.5", callback_data=f"adjust:-0.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton(f"{new_weight}кг", callback_data="noop"),
+            InlineKeyboardButton("➕0.5", callback_data=f"adjust:0.5:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Назад", callback_data=f"weights:{week_number}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def start_week_training(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начать тренировку недели"""
+    query = update.callback_query
+    await query.answer()
+    
+    week_number = int(query.data.split(":")[1])
+    await show_days_for_week(update, context, week_number)
+
+async def show_days_for_week(update: Update, context: ContextTypes.DEFAULT_TYPE, week_number: int):
+    """Показать дни недели с улучшенным форматированием"""
+    user_id = update.effective_user.id
+    user_state = get_user_state(user_id)
+    
+    completed_days = user_state['completed_days'].get(week_number, [])
+    progress_bar = create_progress_bar(completed_days)
+    
+    text = f"📅 <b>Неделя {week_number}</b> [{progress_bar}]\n"
+    text += f"Завершено: {len(completed_days)}/3 дней\n\n"
+    
+    if len(completed_days) == 3:
+        text += "✅ <b>Неделя завершена!</b>\n\n"
+    
+    text += "Выбери день для просмотра тренировки:"
+    
+    keyboard = []
+    for day_num in range(1, 4):
+        label = f"День {day_num}"
+        if day_num in completed_days:
+            label = f"✅ {label}"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"day:{week_number}:{day_num}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора дня с красивым форматированием"""
+    query = update.callback_query
+    await query.answer()
+    
+    _, week_str, day_str = query.data.split(":")
+    week_number = int(week_str)
+    day_number = int(day_str)
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    week_data = TRAINING_PROGRAM.get(week_number)
+    if not week_data:
+        await query.answer("Неделя не найдена")
+        return
+    
+    day_key = f"day_{day_number}"
+    if day_key not in week_data:
+        await query.answer("День не найден")
+        return
+    
+    day_data = week_data[day_key]
+    week_weights = user_state['accessory_weights'].get(week_number, DEFAULT_ACCESSORY_WEIGHTS[week_number])
+    
+    # Используем улучшенное форматирование
+    text = f"<b>📋 {day_data['code']} • {day_data['name']}</b>\n\n"
+    
+    for i, exercise in enumerate(day_data['exercises'], 1):
+        if exercise['type'] == 'base':
+            weight = calculate_weight(exercise['name'], exercise['percentage'])
+            exercise_box = format_exercise_box(exercise, weight, is_base=True)
+            text += f"{i}. {exercise_box}\n\n"
+        
+        elif exercise['type'] == 'accessory':
+            if 'key' in exercise:
+                weight = week_weights.get(exercise['key'], 0)
+                if exercise['reps'] != '3 подхода':
+                    exercise_box = format_exercise_box(exercise, weight, is_base=False)
+                    text += f"{i}. {exercise_box}\n\n"
+                else:
+                    text += f"{i}. {exercise['name']}\n"
+                    text += f"   {exercise['reps']}\n\n"
+            else:
+                text += f"{i}. {exercise['name']}\n"
+                text += f"   {exercise['reps']}\n\n"
+    
+    keyboard = []
+    
+    completed_days = user_state['completed_days'].get(week_number, [])
+    if day_number not in completed_days:
+        keyboard.append([InlineKeyboardButton("✅ Завершить тренировку", callback_data=f"complete:{week_number}:{day_number}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ К дням недели", callback_data=f"days:{week_number}")])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Завершить тренировку"""
+    query = update.callback_query
+    await query.answer()
+    
+    _, week_str, day_str = query.data.split(":")
+    week_number = int(week_str)
+    day_number = int(day_str)
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    if week_number not in user_state['completed_days']:
+        user_state['completed_days'][week_number] = []
+    
+    if day_number not in user_state['completed_days'][week_number]:
+        user_state['completed_days'][week_number].append(day_number)
+        user_state['completed_days'][week_number].sort()
+    
+    completed_days = user_state['completed_days'].get(week_number, [])
+    progress_bar = create_progress_bar(completed_days)
+    
+    text = f"<b>✅ Тренировка завершена!</b>\n\n📅 <b>Неделя {week_number}</b> [{progress_bar}]\n"
+    text += f"Завершено: {len(completed_days)}/3 дней\n\n"
+    
+    if len(completed_days) == 3:
+        text += "🎉 <b>Поздравляю! Неделя тренировок завершена!</b>\n\n"
+        
+        if week_number < 2:
+            text += f"Готов перейти к <b>неделе {week_number + 1}</b>?\n"
+            keyboard = [
+                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"week:{week_number + 1}")],
+                [InlineKeyboardButton("🏠 В главное меню", callback_data="back")]
+            ]
+        else:
+            text += "🏆 <b>Ты завершил все недели тренировок!</b>\n\n"
+            text += f"📊 <b>Время для проходки по жиму лежа!</b>\n"
+            text += f"Предыдущий максимум: <b>{USER_MAXES['bench']}кг</b>\n\n"
+            text += f"Установи новый максимум (±0.5кг):"
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("➖0.5", callback_data="bench:-0.5"),
+                    InlineKeyboardButton(f"{USER_MAXES['bench']}кг", callback_data="noop"),
+                    InlineKeyboardButton("➕0.5", callback_data="bench:0.5")
+                ],
+                [
+                    InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_bench:{USER_MAXES['bench']}")
+                ]
+            ]
+    else:
+        keyboard = []
+        for day_num in range(1, 4):
+            label = f"День {day_num}"
+            if day_num in completed_days:
+                label = f"✅ {label}"
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"day:{week_number}:{day_num}")])
+        
+        keyboard.append([InlineKeyboardButton("🏠 В главное меню", callback_data="back")])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def adjust_bench(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Регулировка жима"""
+    query = update.callback_query
+    await query.answer()
+    
+    _, adjustment_str = query.data.split(":")
+    adjustment = float(adjustment_str)
+    
+    USER_MAXES['bench'] += adjustment
+    USER_MAXES['bench'] = max(50, min(300, USER_MAXES['bench']))
+    USER_MAXES['bench'] = round(USER_MAXES['bench'] * 2) / 2
+    
+    text = (
+        "🏆 <b>Ты завершил все недели тренировок!</b>\n\n"
+        f"📊 <b>Время для проходки по жиму лежа!</b>\n"
+        f"Предыдущий максимум: <b>{USER_MAXES['bench']}кг</b>\n\n"
+        f"Установи новый максимум (±0.5кг):"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("➖0.5", callback_data="bench:-0.5"),
+            InlineKeyboardButton(f"{USER_MAXES['bench']}кг", callback_data="noop"),
+            InlineKeyboardButton("➕0.5", callback_data="bench:0.5")
+        ],
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_bench:{USER_MAXES['bench']}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def confirm_bench(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтвердить результат жима"""
+    query = update.callback_query
+    await query.answer()
+    
+    _, result_str = query.data.split(":")
+    result = float(result_str)
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    user_state['entry_test_result'] = result
+    
+    text = (
+        "🏆 <b>Отличный результат!</b>\n\n"
+        f"Твой новый максимум в жиме лежа: <b>{result}кг</b>\n\n"
+        "Теперь программа будет использовать этот вес для расчета тренировок.\n\n"
+        "<b>Что дальше?</b>\n"
+        "• Начать новый цикл тренировок с обновленным максимумом\n"
+        "• Или сделать перерыв и продолжить позже\n\n"
+        "<i>Твой прогресс сохранен</i>"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Начать новый цикл", callback_data="new_cycle")],
+        [InlineKeyboardButton("🏠 В главное меню", callback_data="back")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def start_new_cycle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начать новый цикл"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    user_state['completed_days'] = {}
+    
+    text = (
+        "🔄 <b>Новый цикл начат!</b>\n\n"
+        f"Твой текущий максимум в жиме: <b>{USER_MAXES['bench']}кг</b>\n"
+        "Программа пересчитана под новый вес.\n\n"
+        "Выбери неделю для начала:"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🏋️ Неделя 1", callback_data="week:1")],
+        [InlineKeyboardButton("🏋️ Неделя 2", callback_data="week:2")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_maxes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать максимумы"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    text = (
+        "<b>📊 Твои максимумы:</b>\n\n"
+        f"• Жим лежа: {USER_MAXES['bench']}кг\n"
+        f"• Присед: {USER_MAXES['squat']}кг\n"
+        f"• Становая: {USER_MAXES['deadlift']}кг\n\n"
+    )
+    
+    if user_state.get('entry_test_result'):
+        text += f"<b>Последняя проходка по жиму:</b> {user_state['entry_test_result']}кг\n\n"
+    
+    text += "<i>Для изменения максимумов обратитесь к администратору</i>"
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back")]]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def reset_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сбросить прогресс"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    user_state['completed_days'] = {}
+    user_state['accessory_weights'] = DEFAULT_ACCESSORY_WEIGHTS.copy()
+    
+    keyboard = [
+        [InlineKeyboardButton("🏋️ Неделя 1", callback_data="week:1")],
+        [InlineKeyboardButton("🏋️ Неделя 2", callback_data="week:2")]
+    ]
+    
+    await query.edit_message_text(
+        "🔄 <b>Прогресс сброшен!</b>\n\n"
+        "Все завершенные тренировки и настройки весов очищены.\n"
+        f"Текущий максимум в жиме: <b>{USER_MAXES['bench']}кг</b>\n\n"
+        "Выбери неделю для начала:",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Панель администратора с проверкой прав"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Загружаем список админов из файла или переменной окружения
+    try:
+        with open('admins.json', 'r') as f:
+            admin_ids = json.load(f)
+    except:
+        admin_ids = []
+    
+    # Проверка прав
+    user_id = query.from_user.id
+    if user_id not in admin_ids:
+        await query.answer("⛔ Доступ запрещен")
+        return
+    
+    if len(user_data) == 0:
+        text = "📊 <b>Панель администратора</b>\n\nПока нет активных пользователей."
+    else:
+        text = "<b>📊 Прогресс учеников:</b>\n\n"
+        
+        for uid, data in user_data.items():
+            username = data.get('username', 'Без username')
+            first_name = data.get('first_name', '')
+            last_name = data.get('last_name', '')
+            
+            user_info = f"{first_name} {last_name}".strip()
+            if user_info:
+                user_info = f" ({user_info})"
+            
+            total_completed = 0
+            for week in [1, 2]:
+                completed_days = data['completed_days'].get(week, [])
+                total_completed += len(completed_days)
+            
+            entry_result = data.get('entry_test_result')
+            entry_text = f", Проходка: {entry_result}кг" if entry_result else ""
+            
+            text += f"👤 @{username}{user_info}\n"
+            text += f"   Завершено: {total_completed}/6 дней{entry_text}\n"
+            
+            for week in [1, 2]:
+                completed_days = data['completed_days'].get(week, [])
+                if completed_days:
+                    progress = create_progress_bar(completed_days)
+                    text += f"   Неделя {week}: {progress} ({len(completed_days)}/3)\n"
+            
+            text += "\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🏠 В главное меню", callback_data="back")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def handle_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Назад в главное меню"""
+    query = update.callback_query
+    await query.answer()
+    
+    await show_week_selection(update, context)
+
+async def handle_noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пустой обработчик"""
+    query = update.callback_query
+    await query.answer()
+
+async def handle_weights(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вернуться к весам"""
+    query = update.callback_query
+    await query.answer()
+    
+    week_number = int(query.data.split(":")[1])
+    await show_accessory_weights(update, context, week_number)
+
+async def handle_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вернуться к дням"""
+    query = update.callback_query
+    await query.answer()
+    
+    week_number = int(query.data.split(":")[1])
+    await show_days_for_week(update, context, week_number)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Ошибка: {context.error}")
+    
+    try:
+        if update.callback_query:
+            await update.callback_query.answer("⚠️ Произошла ошибка. Попробуй /start")
+    except:
+        pass
 
 # ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 def main():
     """Основная функция запуска бота"""
-    logger, audit_logger = setup_logging()
-    logger.info("🚀 Запуск бота...")
+    logger.info("🚀 Запуск бота на Railway...")
     
     try:
-        # Проверка токена
-        if not BOT_TOKEN:
-            logger.error("❌ BOT_TOKEN не установлен")
-            return
-        
         application = Application.builder().token(BOT_TOKEN).build()
-        handlers = BotHandlers()
         
-        # Регистрация обработчиков
-        application.add_handler(CommandHandler('start', handlers.start))
+        # Регистрируем обработчики
+        application.add_handler(CommandHandler('start', start))
         
         # Основные callback обработчики
-        application.add_handler(CallbackQueryHandler(
-            handlers.show_week_selection, 
-            pattern=f"^{CallbackAction.BACK.value}$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            handlers.handle_week_selection, 
-            pattern=f"^{CallbackAction.WEEK.value}:"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            handlers.mark_set_completed,
-            pattern=f"^{CallbackAction.MARK_SET.value}:"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            handlers.show_admin_panel,
-            pattern=f"^{CallbackAction.ADMIN.value}$"
-        ))
+        application.add_handler(CallbackQueryHandler(handle_back, pattern='^back$'))
+        application.add_handler(CallbackQueryHandler(handle_week_selection, pattern='^week:'))
+        application.add_handler(CallbackQueryHandler(show_maxes, pattern='^maxes$'))
+        application.add_handler(CallbackQueryHandler(reset_progress, pattern='^reset$'))
+        application.add_handler(CallbackQueryHandler(show_admin_panel, pattern='^admin$'))
+        
+        # Веса подсобки
+        application.add_handler(CallbackQueryHandler(edit_weight, pattern='^edit:'))
+        application.add_handler(CallbackQueryHandler(adjust_weight, pattern='^adjust:'))
+        application.add_handler(CallbackQueryHandler(handle_weights, pattern='^weights:'))
+        application.add_handler(CallbackQueryHandler(start_week_training, pattern='^start_week:'))
+        
+        # Дни тренировки
+        application.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
+        application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
+        application.add_handler(CallbackQueryHandler(handle_days, pattern='^days:'))
+        
+        # Проходка по жиму
+        application.add_handler(CallbackQueryHandler(adjust_bench, pattern='^bench:'))
+        application.add_handler(CallbackQueryHandler(confirm_bench, pattern='^confirm_bench:'))
+        application.add_handler(CallbackQueryHandler(start_new_cycle, pattern='^new_cycle$'))
+        
+        # Пустой обработчик
+        application.add_handler(CallbackQueryHandler(handle_noop, pattern='^noop$'))
         
         # Обработчик ошибок
-        application.add_error_handler(lambda u, c: logger.error(f"Ошибка: {c.error}"))
+        application.add_error_handler(error_handler)
         
         logger.info("✅ Приложение создано и настроено")
         
-        # Webhook или polling
-        if WEBHOOK_URL:
-            webhook_url = f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}"
-            logger.info(f"🌐 Настройка webhook на: {webhook_url}")
-            
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                url_path=BOT_TOKEN,
-                webhook_url=webhook_url,
-                drop_pending_updates=True
-            )
-        else:
-            logger.info("🔄 Запуск в режиме polling")
-            application.run_polling(drop_pending_updates=True)
+        webhook_url = f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}"
+        logger.info(f"🌐 Настройка webhook на: {webhook_url}")
+        
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=webhook_url,
+            drop_pending_updates=True
+        )
         
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}")
