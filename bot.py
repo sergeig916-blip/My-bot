@@ -141,9 +141,11 @@ def get_user_state(user_id: int) -> Dict:
     if user_id not in user_data:
         user_data[user_id] = {
             'completed_days': {},  # week -> [days]
+            'completed_weeks': [], # список завершенных недель
             'accessory_weights': DEFAULT_ACCESSORY_WEIGHTS.copy(),
             'current_week': None,
-            'editing_exercise': None
+            'editing_exercise': None,
+            'editing_weight': None
         }
     return user_data[user_id]
 
@@ -201,16 +203,26 @@ def get_accessory_exercises_for_week(week_number: int) -> List[Dict]:
 
 async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать выбор недели"""
-    keyboard = [
-        [InlineKeyboardButton("🏋️ Неделя 1", callback_data="select_week:1")],
-        [InlineKeyboardButton("🏋️ Неделя 2", callback_data="select_week:2")],
-        [InlineKeyboardButton("📊 Мои максимумы", callback_data="menu:maxes")],
-        [InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="reset_progress")]
-    ]
+    user_id = update.effective_user.id
+    user_state = get_user_state(user_id)
+    
+    keyboard = []
+    for week_num in [1, 2]:
+        label = f"🏋️ Неделя {week_num}"
+        # Проверяем, завершена ли неделя
+        completed_days = user_state['completed_days'].get(week_num, [])
+        if len(completed_days) == 3 or week_num in user_state.get('completed_weeks', []):
+            label = f"✅ {label}"
+        
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"select_week:{week_num}")])
+    
+    keyboard.append([InlineKeyboardButton("📊 Мои максимумы", callback_data="menu:maxes")])
+    keyboard.append([InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="reset_progress")])
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
             "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\n"
+            "✅ - неделя завершена\n"
             "Выбери неделю тренировки:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -219,6 +231,7 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await update.message.reply_text(
             "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\n"
+            "✅ - неделя завершена\n"
             "Выбери неделю тренировки:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -275,7 +288,7 @@ async def review_accessory_weights(update: Update, context: ContextTypes.DEFAULT
     return REVIEW_ACCESSORY_WEIGHTS
 
 async def edit_weight_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запрос на изменение веса"""
+    """Запрос на изменение веса с кнопками +/-"""
     query = update.callback_query
     await query.answer()
     
@@ -294,16 +307,134 @@ async def edit_weight_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
     exercise_name = next((e['name'] for e in exercises if e['key'] == exercise_key), exercise_key)
     
     # Текущий вес
+    if week_number not in user_state['accessory_weights']:
+        user_state['accessory_weights'][week_number] = DEFAULT_ACCESSORY_WEIGHTS[week_number].copy()
+    
     current_weight = user_state['accessory_weights'][week_number].get(exercise_key, 0)
+    user_state['editing_weight'] = current_weight
     
     text = (
         f"<b>✏️ Изменение веса</b>\n\n"
         f"Упражнение: {exercise_name}\n"
         f"Текущий вес: <b>{current_weight}кг</b>\n\n"
+        f"Используй кнопки для быстрого изменения или введи свой вес:"
+    )
+    
+    # Создаем клавиатуру с кнопками +/-2.5 и +/-5
+    keyboard = [
+        [
+            InlineKeyboardButton("➖5", callback_data=f"adjust_weight:-5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton("➖2.5", callback_data=f"adjust_weight:-2.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton(f"{current_weight}кг", callback_data="noop"),
+            InlineKeyboardButton("➕2.5", callback_data=f"adjust_weight:2.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton("➕5", callback_data=f"adjust_weight:5:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("Ввести свой вес", callback_data=f"enter_custom:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"back_to_review:{week_number}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return EDIT_WEIGHT
+
+async def adjust_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрая регулировка веса"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем данные
+    _, adjustment_str, week_str, exercise_key = query.data.split(":")
+    week_number = int(week_str)
+    adjustment = float(adjustment_str)
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    # Получаем текущий вес
+    if week_number not in user_state['accessory_weights']:
+        user_state['accessory_weights'][week_number] = DEFAULT_ACCESSORY_WEIGHTS[week_number].copy()
+    
+    current_weight = user_state['accessory_weights'][week_number].get(exercise_key, 0)
+    
+    # Применяем изменение
+    new_weight = current_weight + adjustment
+    new_weight = max(0, new_weight)  # Не позволяем отрицательный вес
+    new_weight = round(new_weight * 2) / 2  # Округляем до 0.5
+    
+    # Сохраняем новый вес
+    user_state['accessory_weights'][week_number][exercise_key] = new_weight
+    user_state['editing_weight'] = new_weight
+    
+    # Обновляем сообщение с новыми кнопками
+    exercises = get_accessory_exercises_for_week(week_number)
+    exercise_name = next((e['name'] for e in exercises if e['key'] == exercise_key), exercise_key)
+    
+    text = (
+        f"<b>✏️ Изменение веса</b>\n\n"
+        f"Упражнение: {exercise_name}\n"
+        f"Текущий вес: <b>{new_weight}кг</b>\n\n"
+        f"Используй кнопки для быстрого изменения или введи свой вес:"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("➖5", callback_data=f"adjust_weight:-5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton("➖2.5", callback_data=f"adjust_weight:-2.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton(f"{new_weight}кг", callback_data="noop"),
+            InlineKeyboardButton("➕2.5", callback_data=f"adjust_weight:2.5:{week_number}:{exercise_key}"),
+            InlineKeyboardButton("➕5", callback_data=f"adjust_weight:5:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("Ввести свой вес", callback_data=f"enter_custom:{week_number}:{exercise_key}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"back_to_review:{week_number}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def enter_custom_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрос на ввод своего веса"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем данные
+    _, week_str, exercise_key = query.data.split(":")
+    week_number = int(week_str)
+    user_id = query.from_user.id
+    user_state = get_user_state(user_id)
+    
+    # Сохраняем какое упражнение редактируем
+    user_state['editing_exercise'] = exercise_key
+    user_state['current_week'] = week_number
+    
+    # Текущий вес
+    current_weight = user_state['accessory_weights'][week_number].get(exercise_key, 0)
+    
+    # Находим имя упражнения
+    exercises = get_accessory_exercises_for_week(week_number)
+    exercise_name = next((e['name'] for e in exercises if e['key'] == exercise_key), exercise_key)
+    
+    text = (
+        f"<b>✏️ Ввод своего веса</b>\n\n"
+        f"Упражнение: {exercise_name}\n"
+        f"Текущий вес: <b>{current_weight}кг</b>\n\n"
         f"Введи новый вес (кг):"
     )
     
-    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data=f"back_to_review:{week_number}")]]
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data=f"edit_weight:{week_number}:{exercise_key}")]]
     
     await query.edit_message_text(
         text,
@@ -335,38 +466,7 @@ async def save_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state['accessory_weights'][week_number][exercise_key] = new_weight
         
         # Возвращаемся к списку весов
-        exercises = get_accessory_exercises_for_week(week_number)
-        user_weights = user_state['accessory_weights'][week_number]
-        
-        text = f"<b>✅ Вес обновлен!</b>\n\n📝 Веса для подсобки (Неделя {week_number}):\n\n"
-        
-        keyboard = []
-        for i, exercise in enumerate(exercises, 1):
-            weight = user_weights.get(exercise['key'], 0)
-            text += f"{i}. {exercise['name']}: <b>{weight}кг</b>\n"
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"{i}. {exercise['name']} - {weight}кг",
-                    callback_data=f"edit_weight:{week_number}:{exercise['key']}"
-                )
-            ])
-        
-        text += "\nНажми на упражнение, чтобы изменить вес, или продолжи с текущими весами:"
-        
-        keyboard.append([
-            InlineKeyboardButton("✅ Продолжить с этими весами", callback_data=f"use_weights:{week_number}")
-        ])
-        keyboard.append([
-            InlineKeyboardButton("⬅️ Выбрать другую неделю", callback_data="back_to_weeks")
-        ])
-        
-        await update.message.reply_text(
-            text,
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        
-        return REVIEW_ACCESSORY_WEIGHTS
+        return await review_accessory_weights(update, context)
         
     except ValueError:
         await update.message.reply_text("❌ Пожалуйста, введи число (например: 20.5 или 20):")
@@ -383,8 +483,28 @@ async def start_week_training(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_state = get_user_state(user_id)
     
     # Показываем меню дней недели
+    await show_days_for_week(update, context, week_number)
+
+async def show_days_for_week(update: Update, context: ContextTypes.DEFAULT_TYPE, week_number: int):
+    """Показать дни для недели"""
+    user_id = update.effective_user.id
+    user_state = get_user_state(user_id)
+    
     completed_days = user_state['completed_days'].get(week_number, [])
     progress_bar = create_progress_bar(completed_days)
+    
+    # Проверяем, завершена ли неделя
+    week_completed = len(completed_days) == 3 or week_number in user_state.get('completed_weeks', [])
+    
+    text = f"📅 <b>Неделя {week_number}</b> [{progress_bar}]\n"
+    text += f"Завершено: {len(completed_days)}/3 дней\n\n"
+    
+    if week_completed:
+        text += "✅ <b>Неделя завершена!</b>\n"
+        if week_number < 2:  # Если это не последняя неделя
+            text += f"Переходи к <b>неделе {week_number + 1}</b>\n\n"
+    
+    text += "Выбери день для просмотра тренировки:"
     
     keyboard = []
     for day_num in range(1, 4):
@@ -396,13 +516,18 @@ async def start_week_training(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     keyboard.append([InlineKeyboardButton("⬅️ Выбрать другую неделю", callback_data="back_to_weeks")])
     
-    await query.edit_message_text(
-        f"📅 <b>Неделя {week_number}</b> [{progress_bar}]\n"
-        f"Завершено: {len(completed_days)}/3 дней\n\n"
-        "Выбери день:",
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора дня"""
@@ -486,22 +611,48 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state['completed_days'][week_number].append(day_number)
         user_state['completed_days'][week_number].sort()
     
-    # Показываем обновленный прогресс
+    # Проверяем, завершена ли неделя
     completed_days = user_state['completed_days'].get(week_number, [])
+    if len(completed_days) == 3:
+        # Добавляем неделю в завершенные
+        if 'completed_weeks' not in user_state:
+            user_state['completed_weeks'] = []
+        if week_number not in user_state['completed_weeks']:
+            user_state['completed_weeks'].append(week_number)
+    
+    # Показываем результат
     progress_bar = create_progress_bar(completed_days)
     
     text = f"<b>✅ Тренировка завершена!</b>\n\n📅 <b>Неделя {week_number}</b> [{progress_bar}]\n"
     text += f"Завершено: {len(completed_days)}/3 дней\n\n"
     
-    keyboard = []
-    for day_num in range(1, 4):
-        label = f"День {day_num}"
-        if day_num in completed_days:
-            label = f"✅ {label}"
-        callback_data = f"day:start:{week_number}:{day_num}"
-        keyboard.append([InlineKeyboardButton(label, callback_data=callback_data)])
-    
-    keyboard.append([InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")])
+    # Если неделя завершена, показываем специальное сообщение
+    if len(completed_days) == 3:
+        text += "🎉 <b>Поздравляю! Неделя тренировок завершена!</b>\n\n"
+        
+        if week_number < 2:  # Если это не последняя неделя
+            text += f"Готов перейти к <b>неделе {week_number + 1}</b>?\n"
+            keyboard = [
+                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"select_week:{week_number + 1}")],
+                [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")]
+            ]
+        else:  # Если это последняя неделя
+            text += "🏆 <b>Ты завершил все недели тренировок!</b>\n"
+            keyboard = [
+                [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")],
+                [InlineKeyboardButton("🔄 Начать заново", callback_data="reset_progress")]
+            ]
+    else:
+        # Показываем кнопки для выбора следующего дня
+        keyboard = []
+        for day_num in range(1, 4):
+            label = f"День {day_num}"
+            if day_num in completed_days:
+                label = f"✅ {label}"
+            callback_data = f"day:start:{week_number}:{day_num}"
+            keyboard.append([InlineKeyboardButton(label, callback_data=callback_data)])
+        
+        keyboard.append([InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")])
     
     await query.edit_message_text(
         text,
@@ -540,6 +691,7 @@ async def reset_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Сбрасываем прогресс и веса
     user_state['completed_days'] = {}
+    user_state['completed_weeks'] = []
     user_state['accessory_weights'] = DEFAULT_ACCESSORY_WEIGHTS.copy()
     
     keyboard = [
@@ -563,29 +715,7 @@ async def back_to_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     week_number = int(query.data.split(":")[1])
-    user_id = query.from_user.id
-    user_state = get_user_state(user_id)
-    
-    completed_days = user_state['completed_days'].get(week_number, [])
-    progress_bar = create_progress_bar(completed_days)
-    
-    keyboard = []
-    for day_num in range(1, 4):
-        label = f"День {day_num}"
-        if day_num in completed_days:
-            label = f"✅ {label}"
-        callback_data = f"day:start:{week_number}:{day_num}"
-        keyboard.append([InlineKeyboardButton(label, callback_data=callback_data)])
-    
-    keyboard.append([InlineKeyboardButton("⬅️ Выбрать другую неделю", callback_data="back_to_weeks")])
-    
-    await query.edit_message_text(
-        f"📅 <b>Неделя {week_number}</b> [{progress_bar}]\n"
-        f"Завершено: {len(completed_days)}/3 дней\n\n"
-        "Выбери день:",
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await show_days_for_week(update, context, week_number)
 
 async def back_to_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Вернуться к просмотру весов"""
@@ -594,6 +724,11 @@ async def back_to_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     week_number = int(query.data.split(":")[1])
     return await review_accessory_weights(update, context)
+
+async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пустой обработчик для кнопок без действия"""
+    query = update.callback_query
+    await query.answer()
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена"""
@@ -640,8 +775,11 @@ def main():
                     CallbackQueryHandler(back_to_review, pattern='^back_to_review:')
                 ],
                 EDIT_WEIGHT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, save_weight),
-                    CallbackQueryHandler(back_to_review, pattern='^back_to_review:')
+                    CallbackQueryHandler(adjust_weight, pattern='^adjust_weight:'),
+                    CallbackQueryHandler(enter_custom_weight, pattern='^enter_custom:'),
+                    CallbackQueryHandler(back_to_review, pattern='^back_to_review:'),
+                    CallbackQueryHandler(edit_weight_prompt, pattern='^edit_weight:'),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, save_weight)
                 ]
             },
             fallbacks=[
@@ -657,6 +795,9 @@ def main():
         application.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
         application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
         application.add_handler(CallbackQueryHandler(back_to_days, pattern='^back_to_days:'))
+        
+        # Обработчик для кнопок без действия
+        application.add_handler(CallbackQueryHandler(noop, pattern='^noop$'))
         
         # Обработчик ошибок
         application.add_error_handler(error_handler)
