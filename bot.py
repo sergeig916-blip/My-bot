@@ -146,7 +146,10 @@ def get_user_state(user_id: int) -> Dict:
             'current_week': None,
             'editing_exercise': None,
             'editing_weight': None,
-            'entry_test_result': None  # результат проходки по жиму
+            'entry_test_result': None,  # результат проходки по жиму
+            'username': None,  # имя пользователя
+            'first_name': None,  # имя
+            'last_name': None  # фамилия
         }
     return user_data[user_id]
 
@@ -202,16 +205,137 @@ def get_accessory_exercises_for_week(week_number: int) -> List[Dict]:
     
     return exercises
 
+async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Панель администратора для просмотра прогресса учеников"""
+    user_id = update.effective_user.id
+    
+    # Проверяем, является ли пользователь администратором (можно добавить проверку по ID)
+    # Пока показываем всем для тестирования
+    
+    if len(user_data) == 0:
+        await update.message.reply_text(
+            "📊 <b>Панель администратора</b>\n\n"
+            "Пока нет активных пользователей.",
+            parse_mode='HTML'
+        )
+        return
+    
+    text = "<b>📊 Прогресс учеников:</b>\n\n"
+    
+    for uid, data in user_data.items():
+        # Получаем информацию о пользователе
+        username = data.get('username', 'Без username')
+        first_name = data.get('first_name', '')
+        last_name = data.get('last_name', '')
+        
+        user_info = f"{first_name} {last_name}".strip()
+        if user_info:
+            user_info = f" ({user_info})"
+        
+        # Считаем прогресс
+        total_completed = 0
+        for week in [1, 2]:
+            completed_days = data['completed_days'].get(week, [])
+            total_completed += len(completed_days)
+        
+        # Результат проходки
+        entry_result = data.get('entry_test_result')
+        entry_text = f", Проходка: {entry_result}кг" if entry_result else ""
+        
+        text += f"👤 @{username}{user_info}\n"
+        text += f"   Завершено: {total_completed}/6 дней{entry_text}\n"
+        
+        # Детали по неделям
+        for week in [1, 2]:
+            completed_days = data['completed_days'].get(week, [])
+            if completed_days:
+                progress = create_progress_bar(completed_days)
+                text += f"   Неделя {week}: {progress} ({len(completed_days)}/3)\n"
+        
+        text += "\n"
+    
+    # Кнопка для экспорта данных
+    keyboard = [
+        [InlineKeyboardButton("📥 Экспорт данных (JSON)", callback_data="export_data")],
+        [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")]
+    ]
+    
+    await update.message.reply_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Экспорт данных в JSON"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Формируем данные для экспорта
+    export_data = {}
+    
+    for uid, data in user_data.items():
+        # Очищаем данные от None значений
+        clean_data = {}
+        for key, value in data.items():
+            if value is not None:
+                if isinstance(value, dict):
+                    clean_value = {k: v for k, v in value.items() if v is not None}
+                    if clean_value:  # Добавляем только если есть данные
+                        clean_data[key] = clean_value
+                elif isinstance(value, list):
+                    clean_value = [v for v in value if v is not None]
+                    if clean_value:  # Добавляем только если есть данные
+                        clean_data[key] = clean_value
+                else:
+                    clean_data[key] = value
+        
+        export_data[str(uid)] = clean_data
+    
+    # Сохраняем в файл
+    import json
+    json_data = json.dumps(export_data, ensure_ascii=False, indent=2)
+    
+    # Отправляем как файл (в реальном боте нужно отправить файлом)
+    # Для простоты показываем в сообщении
+    text = "<b>📥 Экспорт данных:</b>\n\n"
+    text += f"Всего пользователей: {len(user_data)}\n"
+    text += "Данные в формате JSON:\n\n"
+    text += f"<code>{json.dumps(export_data, ensure_ascii=False, indent=2)[:1000]}...</code>"
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML'
+    )
+
 # ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /start с сохранением информации о пользователе"""
+    user = update.effective_user
+    user_id = user.id
+    
+    # Сохраняем информацию о пользователе
+    user_state = get_user_state(user_id)
+    user_state['username'] = user.username
+    user_state['first_name'] = user.first_name
+    user_state['last_name'] = user.last_name
+    
+    # Админская команда
+    if context.args and context.args[0] == 'admin':
+        return await show_admin_panel(update, context)
+    
+    # Обычный старт
+    return await show_week_selection(update, context)
+
 async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать выбор недели"""
+    """Показать выбор недели (УБРАЛ надпись про завершенные недели)"""
     user_id = update.effective_user.id
     user_state = get_user_state(user_id)
     
     keyboard = []
     for week_num in [1, 2]:
         label = f"🏋️ Неделя {week_num}"
-        # Проверяем, завершена ли неделя (только если все 3 дня завершены)
+        # Проверяем, завершена ли неделя
         completed_days = user_state['completed_days'].get(week_num, [])
         if len(completed_days) == 3:
             label = f"✅ {label}"
@@ -220,11 +344,12 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     keyboard.append([InlineKeyboardButton("📊 Мои максимумы", callback_data="menu:maxes")])
     keyboard.append([InlineKeyboardButton("🔄 Сбросить прогресс", callback_data="reset_progress")])
+    # Скрытая кнопка для админа
+    keyboard.append([InlineKeyboardButton("👁️‍🗨️ Прогресс учеников", callback_data="admin_panel")])
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
             "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\n"
-            "✅ - неделя завершена\n"
             "Выбери неделю тренировки:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -233,7 +358,6 @@ async def show_week_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await update.message.reply_text(
             "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\n"
-            "✅ - неделя завершена\n"
             "Выбери неделю тренировки:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -323,7 +447,7 @@ async def review_accessory_weights(update: Update, context: ContextTypes.DEFAULT
     return REVIEW_ACCESSORY_WEIGHTS
 
 async def edit_weight_simple(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Изменение веса подсобки (упрощенная версия с +/-0.5)"""
+    """Изменение веса подсобки с +/-0.5"""
     query = update.callback_query
     await query.answer()
     
@@ -453,6 +577,11 @@ async def show_days_for_week(update: Update, context: ContextTypes.DEFAULT_TYPE,
     
     text = f"📅 <b>Неделя {week_number}</b> [{progress_bar}]\n"
     text += f"Завершено: {len(completed_days)}/3 дней\n\n"
+    
+    # ТОЛЬКО если неделя завершена, показываем это сообщение
+    if len(completed_days) == 3:
+        text += "✅ <b>Неделя завершена!</b>\n\n"
+    
     text += "Выбери день для просмотра тренировки:"
     
     keyboard = []
@@ -541,7 +670,7 @@ async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Завершить тренировку (исправленная версия)"""
+    """Завершить тренировку (ИСПРАВЛЕННАЯ версия)"""
     query = update.callback_query
     await query.answer()
     
@@ -576,7 +705,7 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if week_number < 2:  # Если это не последняя неделя
             text += f"Готов перейти к <b>неделе {week_number + 1}</b>?\n"
             keyboard = [
-                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"go_next_week:{week_number + 1}")],
+                [InlineKeyboardButton(f"➡️ Перейти к неделе {week_number + 1}", callback_data=f"select_week:{week_number + 1}")],
                 [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")]
             ]
         else:  # Если это последняя неделя
@@ -612,22 +741,8 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
-async def go_next_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Переход к следующей неделе (рабочая версия)"""
-    query = update.callback_query
-    await query.answer()
     
-    # Получаем номер следующей недели
-    week_number = int(query.data.split(":")[1])
-    
-    # Сохраняем неделю в состоянии пользователя
-    user_id = query.from_user.id
-    user_state = get_user_state(user_id)
-    user_state['current_week'] = week_number
-    
-    # Показываем настройку весов для следующей недели
-    return await review_accessory_weights(update, context)
+    return SELECT_WEEK
 
 async def adjust_bench_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Регулировка результата проходки по жиму +/-0.5"""
@@ -765,6 +880,56 @@ async def show_maxes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+async def show_admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать панель админа через callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    if len(user_data) == 0:
+        text = "📊 <b>Панель администратора</b>\n\nПока нет активных пользователей."
+    else:
+        text = "<b>📊 Прогресс учеников:</b>\n\n"
+        
+        for uid, data in user_data.items():
+            username = data.get('username', 'Без username')
+            first_name = data.get('first_name', '')
+            last_name = data.get('last_name', '')
+            
+            user_info = f"{first_name} {last_name}".strip()
+            if user_info:
+                user_info = f" ({user_info})"
+            
+            # Считаем прогресс
+            total_completed = 0
+            for week in [1, 2]:
+                completed_days = data['completed_days'].get(week, [])
+                total_completed += len(completed_days)
+            
+            entry_result = data.get('entry_test_result')
+            entry_text = f", Проходка: {entry_result}кг" if entry_result else ""
+            
+            text += f"👤 @{username}{user_info}\n"
+            text += f"   Завершено: {total_completed}/6 дней{entry_text}\n"
+            
+            for week in [1, 2]:
+                completed_days = data['completed_days'].get(week, [])
+                if completed_days:
+                    progress = create_progress_bar(completed_days)
+                    text += f"   Неделя {week}: {progress} ({len(completed_days)}/3)\n"
+            
+            text += "\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("📥 Экспорт данных", callback_data="export_data")],
+        [InlineKeyboardButton("🏠 В главное меню", callback_data="menu:main")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 async def reset_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Сбросить прогресс"""
     query = update.callback_query
@@ -825,6 +990,11 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка обычных сообщений - автостарт"""
+    # Если пользователь просто написал что-то, показываем меню
+    return await show_week_selection(update, context)
+
 # ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 def main():
     """Основная функция запуска бота"""
@@ -837,9 +1007,10 @@ def main():
         # Создаем ConversationHandler
         conv_handler = ConversationHandler(
             entry_points=[
-                CommandHandler('start', show_week_selection),
+                CommandHandler('start', start),
                 CallbackQueryHandler(show_week_selection, pattern='^menu:main$'),
-                CallbackQueryHandler(show_week_selection, pattern='^back_to_weeks$')
+                CallbackQueryHandler(show_week_selection, pattern='^back_to_weeks$'),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)  # Автостарт
             ],
             states={
                 SELECT_WEEK: [
@@ -847,9 +1018,10 @@ def main():
                     CallbackQueryHandler(show_maxes, pattern='^menu:maxes$'),
                     CallbackQueryHandler(reset_progress, pattern='^reset_progress$'),
                     CallbackQueryHandler(show_week_selection, pattern='^menu:main$'),
-                    CallbackQueryHandler(go_next_week, pattern='^go_next_week:'),
+                    CallbackQueryHandler(show_admin_panel_callback, pattern='^admin_panel$'),
                     CallbackQueryHandler(confirm_bench_result, pattern='^confirm_bench:'),
-                    CallbackQueryHandler(start_new_cycle, pattern='^start_new_cycle$')
+                    CallbackQueryHandler(start_new_cycle, pattern='^start_new_cycle$'),
+                    CallbackQueryHandler(export_data, pattern='^export_data$')
                 ],
                 REVIEW_ACCESSORY_WEIGHTS: [
                     CallbackQueryHandler(edit_weight_simple, pattern='^edit_weight_simple:'),
@@ -866,8 +1038,9 @@ def main():
                 ]
             },
             fallbacks=[
-                CommandHandler('start', show_week_selection),
-                CallbackQueryHandler(show_week_selection, pattern='^menu:main$')
+                CommandHandler('start', start),
+                CallbackQueryHandler(show_week_selection, pattern='^menu:main$'),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
             ]
         )
         
@@ -878,6 +1051,9 @@ def main():
         application.add_handler(CallbackQueryHandler(handle_day_selection, pattern='^day:'))
         application.add_handler(CallbackQueryHandler(complete_workout, pattern='^complete:'))
         application.add_handler(CallbackQueryHandler(back_to_days, pattern='^back_to_days:'))
+        
+        # Команда админа
+        application.add_handler(CommandHandler('admin', show_admin_panel))
         
         # Обработчик для кнопок без действия
         application.add_handler(CallbackQueryHandler(noop, pattern='^noop$'))
