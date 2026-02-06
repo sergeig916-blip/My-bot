@@ -1,0 +1,78 @@
+{
+  "1": {
+    "name": "Неделя 1",
+    "day_1": {
+      "name": "Ноги + Грудь",
+      "code": "Н1Д1",
+      "exercises": [
+        {"type": "base", "name": "Приседания", "percentage": 50, "reps": 10, "sets": 3},
+        {"type": "base", "name": "Жим штанги лежа", "percentage": 75, "reps": 3, "sets": 5},
+        {"type": "accessory", "name": "Разводка гантелей лежа", "key": "fly_flat", "reps": 10, "sets": 3},
+        {"type": "accessory", "name": "Сгибание рук обратным хватом", "key": "reverse_curl", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""},
+        {"type": "accessory", "name": "Гиперэкстензия", "reps": 20, "sets": 2}
+      ]
+    },
+    "day_2": {
+      "name": "Спина + Плечи",
+      "code": "Н1Д2",
+      "exercises": [
+        {"type": "base", "name": "Жим штанги стоя", "percentage": 35, "reps": 6, "sets": 2},
+        {"type": "accessory", "name": "Гиперэкстензия с весом", "key": "hyperextension_weight", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Тяга вертикального блока", "key": "vertical_pull", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Тяга горизонтального блока", "key": "horizontal_row", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Разводка на заднюю дельту", "key": "rear_delt_fly", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""}
+      ]
+    },
+    "day_3": {
+      "name": "Грудь + Плечи",
+      "code": "Н1Д3",
+      "exercises": [
+        {"type": "base", "name": "Жим штанги лежа", "percentage": 60, "reps": 5, "sets": 2},
+        {"type": "base", "name": "Жим на наклонной 30°", "percentage": 50, "reps": 6, "sets": 4},
+        {"type": "accessory", "name": "Разводка на наклонной", "key": "fly_incline", "reps": 8, "sets": 4},
+        {"type": "accessory", "name": "Махи гантелей в стороны", "key": "lateral_raise", "reps": 8, "sets": 4},
+        {"type": "accessory", "name": "Сгибание на бицепс обратным хватом", "key": "reverse_curl", "reps": 8, "sets": 5}
+      ]
+    }
+  },
+  "2": {
+    "name": "Неделя 2",
+    "day_1": {
+      "name": "Ноги + Грудь",
+      "code": "Н2Д1",
+      "exercises": [
+        {"type": "base", "name": "Приседания", "percentage": 55, "reps": 8, "sets": 3},
+        {"type": "base", "name": "Жим штанги лежа", "percentage": 80, "reps": 3, "sets": 4},
+        {"type": "accessory", "name": "Разводка гантелей лежа", "key": "fly_flat", "reps": 10, "sets": 3},
+        {"type": "accessory", "name": "Сгибание рук обратным хватом", "key": "reverse_curl", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""},
+        {"type": "accessory", "name": "Гиперэкстензия", "reps": 20, "sets": 2}
+      ]
+    },
+    "day_2": {
+      "name": "Спина + Плечи",
+      "code": "Н2Д2",
+      "exercises": [
+        {"type": "base", "name": "Жим штанги стоя", "percentage": 40, "reps": 6, "sets": 2},
+        {"type": "accessory", "name": "Гиперэкстензия с весом", "key": "hyperextension_weight", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Тяга вертикального блока", "key": "vertical_pull", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Тяга горизонтального блока", "key": "horizontal_row", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Разводка на заднюю дельту", "key": "rear_delt_fly", "reps": 10, "sets": 4},
+        {"type": "accessory", "name": "Пресс", "reps": "3 подхода", "sets": ""}
+      ]
+    },
+    "day_3": {
+      "name": "Грудь + Плечи",
+      "code": "Н2Д3",
+      "exercises": [
+        {"type": "base", "name": "Жим штанги лежа", "percentage": 65, "reps": 5, "sets": 2},
+        {"type": "base", "name": "Жим на наклонной 30°", "percentage": 50, "reps": 6, "sets": 4},
+        {"type": "accessory", "name": "Разводка на наклонной", "key": "fly_incline", "reps": 8, "sets": 4},
+        {"type": "accessory", "name": "Махи гантелей в стороны", "key": "lateral_raise", "reps": 8, "sets": 4},
+        {"type": "accessory", "name": "Сгибание на бицепс обратным хватом", "key": "reverse_curl", "reps": 8, "sets": 5}
+      ]
+    }
+  }
+}
