@@ -11,13 +11,21 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 # Безопасно получаем токен
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    # Фолбэк на старый токен ТОЛЬКО для совместимости
-    # После настройки удали эту строку!
+    # Временный фолбэк для тестирования
     BOT_TOKEN = "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4"
-    logging.warning("⚠️ Используется дефолтный токен. Настрой BOT_TOKEN в переменных окружения!")
 
 PORT = int(os.environ.get("PORT", 8080))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://web-production-bd8b.up.railway.app")
+
+# Загружаем список админов
+def load_admin_ids():
+    try:
+        with open('admins.json', 'r') as f:
+            return json.load(f)
+    except:
+        return []
+
+ADMIN_IDS = load_admin_ids()
 
 # ========== ЗАГРУЗКА ДАННЫХ ИЗ JSON ==========
 def load_json_data():
@@ -32,26 +40,30 @@ def load_json_data():
         with open('user_maxes.json', 'r', encoding='utf-8') as f:
             USER_MAXES = json.load(f)
         
-        # Конвертируем ключи в int для TRAINING_PROGRAM
+        # Конвертируем ключи в int
         TRAINING_PROGRAM = {int(k): v for k, v in TRAINING_PROGRAM.items()}
-        
-        # Конвертируем ключи в int для DEFAULT_ACCESSORY_WEIGHTS
         DEFAULT_ACCESSORY_WEIGHTS = {int(k): v for k, v in DEFAULT_ACCESSORY_WEIGHTS.items()}
         
         return TRAINING_PROGRAM, DEFAULT_ACCESSORY_WEIGHTS, USER_MAXES
         
-    except FileNotFoundError as e:
-        logging.error(f"❌ Файл не найден: {e}")
-        # Возвращаем пустые структуры, код будет использовать старые данные
-        return {}, {}, {}
+    except FileNotFoundError:
+        # Возвращаем None, чтобы использовать данные из кода
+        return None, None, None
 
 # Загружаем данные
-TRAINING_PROGRAM, DEFAULT_ACCESSORY_WEIGHTS, USER_MAXES = load_json_data()
+TRAINING_PROGRAM_JSON, DEFAULT_ACCESSORY_WEIGHTS_JSON, USER_MAXES_JSON = load_json_data()
 
-# Если файлы пустые, используем данные из старого кода
-if not TRAINING_PROGRAM:
-    logging.info("📁 Использую данные из кода")
+# Используем данные из JSON или из кода
+if TRAINING_PROGRAM_JSON:
+    TRAINING_PROGRAM = TRAINING_PROGRAM_JSON
+    DEFAULT_ACCESSORY_WEIGHTS = DEFAULT_ACCESSORY_WEIGHTS_JSON
+    USER_MAXES = USER_MAXES_JSON
+    logger = logging.getLogger(__name__)
+    logger.info("✅ Данные загружены из JSON файлов")
+else:
+    # Данные из старого кода
     USER_MAXES = {'bench': 117.5, 'squat': 125, 'deadlift': 150}
+    
     DEFAULT_ACCESSORY_WEIGHTS = {
         1: {
             'fly_flat': 17.5, 'fly_incline': 17.5, 'reverse_curl': 25.0,
@@ -66,6 +78,7 @@ if not TRAINING_PROGRAM:
             'leg_extension': 56.0
         }
     }
+    
     TRAINING_PROGRAM = {
         1: {
             "name": "Неделя 1",
@@ -148,37 +161,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ========== УТИЛИТЫ ДЛЯ ФОРМАТИРОВАНИЯ ==========
-def format_exercise_box(exercise: Dict, weight: float = None, is_base: bool = False) -> str:
-    """Форматирует упражнение в красивую рамку"""
+def format_exercise(exercise: Dict, weight: float = None, is_base: bool = False) -> str:
+    """Форматирует упражнение в красивый вид"""
+    name = exercise['name']
+    
+    # Определяем эмодзи для типа упражнения
     if is_base:
-        border = "🟦"
         emoji = "🏋️"
     else:
-        border = "🟩"
         emoji = "💪"
     
-    name = exercise['name']
-    reps = exercise['reps']
-    sets = exercise['sets']
+    # Формируем строку с параметрами
+    params = []
+    if weight is not None:
+        params.append(f"{weight}кг")
     
-    # Формируем строку с весом
-    weight_str = f"\n📊 Вес: {weight}кг" if weight is not None else ""
+    if exercise.get('reps'):
+        params.append(f"{exercise['reps']} повторений")
     
-    # Формируем строку с подходами/повторениями
-    if reps and sets:
-        reps_sets = f"\n🔢 {reps} × {sets}"
-    elif reps:
-        reps_sets = f"\n🔢 {reps}"
-    else:
-        reps_sets = ""
+    if exercise.get('sets'):
+        params.append(f"{exercise['sets']} подходов")
     
-    return (
-        f"{border}┏━━━━━━━━━━━━━━━━━━━━━┓\n"
-        f"{emoji} {name}"
-        f"{weight_str}"
-        f"{reps_sets}\n"
-        f"{border}┗━━━━━━━━━━━━━━━━━━━━━┛"
-    )
+    # Объединяем параметры в скобках
+    params_str = f" ({', '.join(params)})" if params else ""
+    
+    return f"{emoji} {name}{params_str}"
 
 def calculate_weight(exercise_name: str, percentage: float):
     """Рассчитывает рабочий вес для упражнения"""
@@ -455,7 +462,7 @@ async def start_week_training(update: Update, context: ContextTypes.DEFAULT_TYPE
     await show_days_for_week(update, context, week_number)
 
 async def show_days_for_week(update: Update, context: ContextTypes.DEFAULT_TYPE, week_number: int):
-    """Показать дни недели с улучшенным форматированием"""
+    """Показать дни недели"""
     user_id = update.effective_user.id
     user_state = get_user_state(user_id)
     
@@ -493,7 +500,7 @@ async def show_days_for_week(update: Update, context: ContextTypes.DEFAULT_TYPE,
         )
 
 async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора дня с красивым форматированием"""
+    """Обработка выбора дня с улучшенным форматированием"""
     query = update.callback_query
     await query.answer()
     
@@ -517,27 +524,38 @@ async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYP
     day_data = week_data[day_key]
     week_weights = user_state['accessory_weights'].get(week_number, DEFAULT_ACCESSORY_WEIGHTS[week_number])
     
-    # Используем улучшенное форматирование
-    text = f"<b>📋 {day_data['code']} • {day_data['name']}</b>\n\n"
+    # Используем улучшенное форматирование с разделителями
+    text = f"<b>📋 {day_data['code']} • {day_data['name']}</b>\n"
+    text += "─" * 25 + "\n\n"
     
     for i, exercise in enumerate(day_data['exercises'], 1):
         if exercise['type'] == 'base':
             weight = calculate_weight(exercise['name'], exercise['percentage'])
-            exercise_box = format_exercise_box(exercise, weight, is_base=True)
-            text += f"{i}. {exercise_box}\n\n"
+            
+            # Первая строка: упражнение
+            text += f"<b>{i}. {exercise['name']}</b>\n"
+            # Вторая строка: параметры в скобках
+            text += f"   ({weight}кг × {exercise['reps']} × {exercise['sets']})\n"
         
         elif exercise['type'] == 'accessory':
+            # Первая строка: упражнение
+            text += f"{i}. {exercise['name']}\n"
+            
             if 'key' in exercise:
                 weight = week_weights.get(exercise['key'], 0)
                 if exercise['reps'] != '3 подхода':
-                    exercise_box = format_exercise_box(exercise, weight, is_base=False)
-                    text += f"{i}. {exercise_box}\n\n"
+                    # Вторая строка: параметры в скобках
+                    text += f"   ({weight}кг × {exercise['reps']} × {exercise['sets']})\n"
                 else:
-                    text += f"{i}. {exercise['name']}\n"
-                    text += f"   {exercise['reps']}\n\n"
+                    text += f"   ({exercise['reps']})\n"
             else:
-                text += f"{i}. {exercise['name']}\n"
-                text += f"   {exercise['reps']}\n\n"
+                text += f"   ({exercise['reps']})\n"
+        
+        # Добавляем разделитель между упражнениями (кроме последнего)
+        if i < len(day_data['exercises']):
+            text += "―\n"
+        else:
+            text += "\n"
     
     keyboard = []
     
@@ -774,16 +792,9 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    # Загружаем список админов из файла или переменной окружения
-    try:
-        with open('admins.json', 'r') as f:
-            admin_ids = json.load(f)
-    except:
-        admin_ids = []
-    
     # Проверка прав
     user_id = query.from_user.id
-    if user_id not in admin_ids:
+    if ADMIN_IDS and user_id not in ADMIN_IDS:
         await query.answer("⛔ Доступ запрещен")
         return
     
