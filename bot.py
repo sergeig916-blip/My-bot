@@ -2,12 +2,18 @@ import os
 import logging
 import asyncio
 import json
+from typing import Dict, Any
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.error import Conflict, RetryAfter
 
 # ========== НАСТРОЙКИ ==========
-BOT_TOKEN = "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8533684792:AAE4MJzrCpeG3UFUul4aw5ta8TIN711f_J4")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")  # https://ваш-проект.railway.app/
+WEBHOOK_PORT = int(os.environ.get("PORT", 8443))
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 # ========== ЛОГИРОВАНИЕ ==========
 logging.basicConfig(
@@ -16,12 +22,58 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ========== ГЛОБАЛЬНЫЕ ДАННЫЕ В ПАМЯТИ ==========
-# ВНИМАНИЕ: Данные сбросятся при перезапуске бота!
-# Для продажи нужно заменить на базу данных
+# ========== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ==========
+def get_db_connection():
+    """Создание подключения к базе данных"""
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-USER_DATA = {}  # {user_id: {maxes: {...}, weeks: {...}}}
+def init_database():
+    """Инициализация таблиц в базе данных"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Таблица пользователей
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username VARCHAR(255),
+            first_name VARCHAR(255),
+            last_name VARCHAR(255),
+            bench_max DECIMAL DEFAULT 117.5,
+            squat_max DECIMAL DEFAULT 125,
+            deadlift_max DECIMAL DEFAULT 150,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        
+        # Таблица тренировочных недель
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS training_weeks (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT REFERENCES users(user_id),
+            week_number INTEGER NOT NULL,
+            completed_days JSONB DEFAULT '[]',
+            weights_set BOOLEAN DEFAULT FALSE,
+            week_weights JSONB DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, week_number)
+        )
+        """)
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("✅ База данных инициализирована")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации базы данных: {e}")
 
+# Инициализируем базу при запуске
+if DATABASE_URL:
+    init_database()
+
+# ========== ДАННЫЕ ПО УМОЛЧАНИЮ ==========
 DEFAULT_ACCESSORY_WEIGHTS = {
     'fly_flat': 17.5,
     'fly_incline': 17.5,
@@ -114,52 +166,150 @@ TRAINING_PROGRAM = {
     }
 }
 
-# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ ==========
-def get_user_data(user_id: int):
-    """Получить данные пользователя"""
-    if user_id not in USER_DATA:
-        USER_DATA[user_id] = {
-            'maxes': {'bench': 117.5, 'squat': 125, 'deadlift': 150},
-            'weeks': {}
-        }
-    return USER_DATA[user_id]
+# ========== ФУНКЦИИ БАЗЫ ДАННЫХ ==========
+def get_or_create_user(user_id: int, username: str = None, first_name: str = None, last_name: str = None):
+    """Получить или создать пользователя"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            INSERT INTO users (user_id, username, first_name, last_name)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                first_name = EXCLUDED.first_name,
+                last_name = EXCLUDED.last_name
+            RETURNING *
+        """, (user_id, username, first_name, last_name))
+        
+        user = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return user
+    except Exception as e:
+        logger.error(f"Ошибка при создании пользователя: {e}")
+        return None
 
 def get_user_maxes(user_id: int):
     """Получить максимумы пользователя"""
-    user_data = get_user_data(user_id)
-    return user_data['maxes']
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT bench_max, squat_max, deadlift_max
+            FROM users
+            WHERE user_id = %s
+        """, (user_id,))
+        
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if result:
+            return {
+                'bench': float(result['bench_max']),
+                'squat': float(result['squat_max']),
+                'deadlift': float(result['deadlift_max'])
+            }
+        return {'bench': 117.5, 'squat': 125, 'deadlift': 150}
+    except Exception as e:
+        logger.error(f"Ошибка при получении максимумов: {e}")
+        return {'bench': 117.5, 'squat': 125, 'deadlift': 150}
 
-def get_or_create_week(user_id: int, week_number: int):
+def get_or_create_training_week(user_id: int, week_number: int):
     """Получить или создать неделю тренировок"""
-    user_data = get_user_data(user_id)
-    
-    if week_number not in user_data['weeks']:
-        user_data['weeks'][week_number] = {
-            'completed_days': [],
-            'weights_set': False,
-            'week_weights': DEFAULT_ACCESSORY_WEIGHTS.copy()
-        }
-    
-    return user_data['weeks'][week_number]
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Сначала получаем/создаем пользователя
+        get_or_create_user(user_id)
+        
+        # Получаем или создаем неделю
+        cur.execute("""
+            INSERT INTO training_weeks (user_id, week_number, week_weights)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, week_number) DO UPDATE SET
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING *
+        """, (user_id, week_number, json.dumps(DEFAULT_ACCESSORY_WEIGHTS)))
+        
+        week = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return week
+    except Exception as e:
+        logger.error(f"Ошибка при создании недели: {e}")
+        return None
 
 def update_week_weights(user_id: int, week_number: int, weights: dict):
     """Обновить веса для недели"""
-    week_data = get_or_create_week(user_id, week_number)
-    week_data['week_weights'] = weights
-    week_data['weights_set'] = True
-    return week_data
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            UPDATE training_weeks
+            SET week_weights = %s, weights_set = TRUE
+            WHERE user_id = %s AND week_number = %s
+            RETURNING *
+        """, (json.dumps(weights), user_id, week_number))
+        
+        week = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return week
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении весов: {e}")
+        return None
 
 def mark_day_completed(user_id: int, week_number: int, day_number: int):
     """Отметить день как завершенный"""
-    week_data = get_or_create_week(user_id, week_number)
-    
-    if day_number not in week_data['completed_days']:
-        week_data['completed_days'].append(day_number)
-    
-    return week_data['completed_days']
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Получаем текущие завершенные дни
+        cur.execute("""
+            SELECT completed_days
+            FROM training_weeks
+            WHERE user_id = %s AND week_number = %s
+        """, (user_id, week_number))
+        
+        result = cur.fetchone()
+        completed_days = result['completed_days'] if result and result['completed_days'] else []
+        if isinstance(completed_days, str):
+            completed_days = json.loads(completed_days)
+        
+        # Добавляем день, если его еще нет
+        if day_number not in completed_days:
+            completed_days.append(day_number)
+            
+            cur.execute("""
+                UPDATE training_weeks
+                SET completed_days = %s
+                WHERE user_id = %s AND week_number = %s
+            """, (json.dumps(completed_days), user_id, week_number))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return completed_days
+    except Exception as e:
+        logger.error(f"Ошибка при отметке дня: {e}")
+        return []
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def calculate_weight(user_id: int, exercise_name: str, percentage: float) -> float:
+def calculate_weight(user_id: int, exercise_name: str, percentage: float):
     """Расчет веса для базового упражнения"""
     maxes = get_user_maxes(user_id)
     exercise_lower = exercise_name.lower()
@@ -178,7 +328,7 @@ def calculate_weight(user_id: int, exercise_name: str, percentage: float) -> flo
     weight = base * percentage / 100
     return round(weight / 2.5) * 2.5
 
-def create_progress_bar(completed_days: list) -> str:
+def create_progress_bar(completed_days):
     """Создание прогресс-бара для недели"""
     progress = ['⬜', '⬜', '⬜']
     for day_num in completed_days:
@@ -186,7 +336,7 @@ def create_progress_bar(completed_days: list) -> str:
             progress[day_num - 1] = '🟩'
     return ''.join(progress)
 
-def get_unique_accessory_exercises(week_number: int) -> list:
+def get_unique_accessory_exercises(week_number: int):
     """Получить уникальные упражнения подсобки для недели"""
     exercises = []
     seen_keys = set()
@@ -213,10 +363,14 @@ def get_unique_accessory_exercises(week_number: int) -> list:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - главное меню"""
     user = update.effective_user
-    user_id = user.id
     
-    # Инициализируем пользователя
-    get_user_data(user_id)
+    # Регистрируем пользователя
+    get_or_create_user(
+        user_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name
+    )
     
     keyboard = [
         [InlineKeyboardButton("🏋️ Неделя 1", callback_data="menu:week:1")],
@@ -262,7 +416,6 @@ async def show_week_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = query.from_user.id
     
-    # Если вернулись из подменю
     if query.data == "menu:main":
         keyboard = [
             [InlineKeyboardButton("🏋️ Неделя 1", callback_data="menu:week:1")],
@@ -272,12 +425,16 @@ async def show_week_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "🏋️‍♂️ <b>Бот программы 'Жим 150'</b>\n\nВыбери неделю тренировки:"
     
     else:
-        # Показываем неделю с прогресс-баром
         week_number = int(query.data.split(":")[2])
+        week_data = get_or_create_training_week(user_id, week_number)
         
-        # Получаем данные недели
-        week_data = get_or_create_week(user_id, week_number)
-        completed_days = week_data.get('completed_days', [])
+        completed_days = []
+        if week_data and week_data.get('completed_days'):
+            completed_days_data = week_data['completed_days']
+            if isinstance(completed_days_data, str):
+                completed_days = json.loads(completed_days_data)
+            else:
+                completed_days = completed_days_data
         
         progress_bar = create_progress_bar(completed_days)
         
@@ -311,14 +468,20 @@ async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYP
     week_number = int(week_num_str)
     day_number = int(day_num_str)
     
-    # Сохраняем в контексте
     context.user_data['current_week'] = week_number
     context.user_data['current_day'] = day_number
     context.user_data['user_id'] = user_id
     
     # Получаем данные недели
-    week_data = get_or_create_week(user_id, week_number)
-    completed_days = week_data.get('completed_days', [])
+    week_data = get_or_create_training_week(user_id, week_number)
+    
+    completed_days = []
+    if week_data and week_data.get('completed_days'):
+        completed_days_data = week_data['completed_days']
+        if isinstance(completed_days_data, str):
+            completed_days = json.loads(completed_days_data)
+        else:
+            completed_days = completed_days_data
     
     # Если день уже завершен, показываем его
     if action == 'view' or day_number in completed_days:
@@ -326,7 +489,7 @@ async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     # Проверяем, установлены ли веса для недели
-    weights_set = week_data.get('weights_set', False)
+    weights_set = week_data.get('weights_set', False) if week_data else False
     
     if not weights_set:
         await ask_about_weights(query, week_number, user_id, context)
@@ -335,21 +498,24 @@ async def handle_day_selection(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def ask_about_weights(query, week_number: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
     """Спросить про веса подсобки для недели"""
-    # Получаем данные недели
-    week_data = get_or_create_week(user_id, week_number)
-    week_weights = week_data.get('week_weights', DEFAULT_ACCESSORY_WEIGHTS.copy())
+    week_data = get_or_create_training_week(user_id, week_number)
     
-    # Получаем уникальные упражнения подсобки для этой недели
+    week_weights = DEFAULT_ACCESSORY_WEIGHTS.copy()
+    if week_data and week_data.get('week_weights'):
+        weights_data = week_data['week_weights']
+        if isinstance(weights_data, str):
+            week_weights = json.loads(weights_data)
+        else:
+            week_weights = weights_data
+    
     accessory_exercises = get_unique_accessory_exercises(week_number)
     
-    # Формируем текст с весами
     weights_text = f"<b>🏋️ Веса подсобки для недели {week_number}:</b>\n\n"
     
     for i, exercise in enumerate(accessory_exercises, 1):
         weight = week_weights.get(exercise['key'], DEFAULT_ACCESSORY_WEIGHTS.get(exercise['key'], 0))
         weights_text += f"{i}. {exercise['name']}: {weight}кг\n"
     
-    # Сохраняем упражнения в контексте для редактирования
     context.user_data['accessory_exercises'] = accessory_exercises
     context.user_data['edit_index'] = 0
     context.user_data['week_weights'] = week_weights
@@ -376,11 +542,8 @@ async def handle_weights_decision(update: Update, context: ContextTypes.DEFAULT_
     week_number = int(week_num_str)
     
     if decision == 'keep':
-        # Устанавливаем флаг, что веса установлены
         week_weights = context.user_data.get('week_weights', DEFAULT_ACCESSORY_WEIGHTS)
         update_week_weights(user_id, week_number, week_weights)
-        
-        # Показываем первый день
         await show_workout(query, week_number, 1, user_id)
     
     elif decision == 'edit':
@@ -392,7 +555,6 @@ async def edit_weight(query, week_number: int, user_id: int, context: ContextTyp
     week_weights = context.user_data.get('week_weights', DEFAULT_ACCESSORY_WEIGHTS.copy())
     
     if index >= len(accessory_exercises):
-        # Все упражнения отредактированы
         update_week_weights(user_id, week_number, week_weights)
         await show_workout(query, week_number, 1, user_id)
         return
@@ -400,7 +562,6 @@ async def edit_weight(query, week_number: int, user_id: int, context: ContextTyp
     exercise = accessory_exercises[index]
     current_weight = week_weights.get(exercise['key'], DEFAULT_ACCESSORY_WEIGHTS.get(exercise['key'], 0))
     
-    # Клавиатура для изменения веса
     keyboard = [
         [
             InlineKeyboardButton("➖2.5кг", callback_data=f"weight:change:{week_number}:{index}:-2.5"),
@@ -444,16 +605,12 @@ async def handle_weight_change(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if 0 <= index < len(accessory_exercises):
         exercise = accessory_exercises[index]
-        
-        # Получаем текущий вес и изменяем его
         current_weight = week_weights.get(exercise['key'], DEFAULT_ACCESSORY_WEIGHTS.get(exercise['key'], 0))
-        new_weight = max(0, current_weight + change)  # Не позволяем отрицательный вес
+        new_weight = max(0, current_weight + change)
         
-        # Обновляем вес
         week_weights[exercise['key']] = new_weight
         context.user_data['week_weights'] = week_weights
         
-        # Переходим к следующему упражнению
         await edit_weight(query, week_number, user_id, context, index + 1)
 
 async def handle_weight_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -483,10 +640,15 @@ async def show_workout(query, week_number: int, day_number: int, user_id: int):
     day_data = week_data[day_key]
     
     # Получаем веса для недели
-    week_db_data = get_or_create_week(user_id, week_number)
-    week_weights = week_db_data.get('week_weights', DEFAULT_ACCESSORY_WEIGHTS)
+    week_db_data = get_or_create_training_week(user_id, week_number)
+    week_weights = DEFAULT_ACCESSORY_WEIGHTS.copy()
+    if week_db_data and week_db_data.get('week_weights'):
+        weights_data = week_db_data['week_weights']
+        if isinstance(weights_data, str):
+            week_weights = json.loads(weights_data)
+        else:
+            week_weights = weights_data
     
-    # Формируем текст тренировки
     text = f"<b>📋 {day_data['code']} • {day_data['name']}</b>\n\n"
     
     for i, exercise in enumerate(day_data['exercises'], 1):
@@ -508,7 +670,6 @@ async def show_workout(query, week_number: int, day_number: int, user_id: int):
         
         text += "\n"
     
-    # Клавиатура
     keyboard = [
         [InlineKeyboardButton("✅ Завершить тренировку", callback_data=f"complete:{week_number}:{day_number}")],
         [InlineKeyboardButton("⬅️ К дням недели", callback_data=f"menu:week:{week_number}")]
@@ -532,8 +693,14 @@ async def show_completed_day(query, week_number: int, day_number: int, user_id: 
     day_data = week_data[day_key]
     
     # Получаем веса для недели
-    week_db_data = get_or_create_week(user_id, week_number)
-    week_weights = week_db_data.get('week_weights', DEFAULT_ACCESSORY_WEIGHTS)
+    week_db_data = get_or_create_training_week(user_id, week_number)
+    week_weights = DEFAULT_ACCESSORY_WEIGHTS.copy()
+    if week_db_data and week_db_data.get('week_weights'):
+        weights_data = week_db_data['week_weights']
+        if isinstance(weights_data, str):
+            week_weights = json.loads(weights_data)
+        else:
+            week_weights = weights_data
     
     text = f"<b>✅ {day_data['code']} (завершено)</b>\n\n"
     
@@ -567,10 +734,7 @@ async def complete_workout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     week_number = int(week_num_str)
     day_number = int(day_num_str)
     
-    # Отмечаем день как завершенный
     mark_day_completed(user_id, week_number, day_number)
-    
-    # Показываем обновленное меню недели
     await show_week_menu(update, context)
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -583,9 +747,23 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+async def setup_webhook(application):
+    """Настройка webhook"""
+    if WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}"
+        logger.info(f"🌐 Настройка webhook на: {webhook_url}")
+        
+        await application.bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True
+        )
+        logger.info("✅ Webhook установлен")
+    else:
+        logger.warning("⚠️ WEBHOOK_URL не указан, webhook не настроен")
+
 async def main():
     """Основная функция запуска бота"""
-    logger.info("🚀 Запуск бота...")
+    logger.info("🚀 Запуск бота с webhook...")
     
     try:
         # Создаем приложение
@@ -606,19 +784,40 @@ async def main():
         
         logger.info("✅ Все обработчики зарегистрированы")
         
-        # Запускаем polling
-        logger.info("🔄 Запуск polling...")
-        await application.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            timeout=30,
-            poll_interval=1.0
-        )
+        # Инициализируем приложение
+        await application.initialize()
+        
+        # Настраиваем webhook
+        await setup_webhook(application)
+        
+        # Запускаем приложение в режиме webhook
+        if WEBHOOK_URL:
+            logger.info(f"🤖 Бот запущен в режиме webhook на порту {WEBHOOK_PORT}")
+            await application.start()
+            
+            # Для Railway нужно запустить сервер
+            # В Railway это обычно делается через gunicorn
+            # Для простоты оставляем приложение запущенным
+            await asyncio.Event().wait()  # Бесконечное ожидание
+        else:
+            # Если нет webhook URL, запускаем polling (для разработки)
+            logger.warning("⚠️ Запуск в режиме polling (только для разработки!)")
+            await application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES
+            )
             
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}")
         raise
 
 if __name__ == '__main__':
+    # Проверяем наличие необходимых переменных
+    if not DATABASE_URL:
+        logger.warning("⚠️ DATABASE_URL не указан, данные будут храниться в памяти")
+    
+    if not WEBHOOK_URL:
+        logger.warning("⚠️ WEBHOOK_URL не указан, рекомендуется настроить для продакшена")
+    
     # Запускаем бота
     asyncio.run(main())
